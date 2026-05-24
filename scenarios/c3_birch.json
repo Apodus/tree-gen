@@ -1,0 +1,48 @@
+{
+  "kind": "tree",
+  "name": "birch_default",
+  "species": "birch",
+  "seed": 0,
+  "height_m": 14.0,
+  "trunk_base_radius_m": 0.2,
+  "taper_exponent": 2.0,
+  "trunk_taper_rate": 0.65,
+  "root_flare_factor": 1.15,
+  "crown_leader_fraction": 0.4,
+  "crown_onset_ramp_fraction": 0.20,
+  "trunk_sway_amplitude_m": -1,
+  "envelope": {
+    "shape": "oblate_spheroid",
+    "width_m": 6.0,
+    "height_ratio": 1.2,
+    "top_height_ratio": 1.0
+  },
+  "branching": {
+    "attractor_count": 500,
+    "kill_distance": 0.6,
+    "growth_distance": 0.4,
+    "max_iterations": 250,
+    "branch_angle_jitter_deg": 14.0,
+    "min_attractors_to_split": 3,
+    "tropism_strength": 1.0,
+    "angular_spread_split_deg": 30.0,
+    "crown_base_fraction": 0.25,
+    "min_branch_radius_m": 0.006
+  },
+  "tropisms": {
+    "gravitropism": 0.04,
+    "phototropism": 0.0,
+    "light_dir": [0.0, 0.0, 1.0]
+  },
+  "leaves": {
+    "geometry_type": "bent_cross_cluster",
+    "shape": "birch_serrated",
+    "leaf_size_m": 0.08,
+    "cluster_count_per_tip": 2,
+    "leaf_min_branch_depth": 3,
+    "leaf_density_per_meter": 10.0,
+    "leaf_depth_density_curve": 1.2,
+    "leaf_phototropic_bias": 0.4,
+    "leaf_bend_half_angle": 0.349065850398866
+  }
+}

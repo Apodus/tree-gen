@@ -1,0 +1,48 @@
+{
+  "kind": "tree",
+  "name": "oak_default",
+  "species": "oak",
+  "seed": 42,
+  "height_m": 12.0,
+  "trunk_base_radius_m": 0.3,
+  "taper_exponent": 2.0,
+  "trunk_taper_rate": 0.7,
+  "root_flare_factor": 1.3,
+  "crown_leader_fraction": 0.5,
+  "crown_onset_ramp_fraction": 0.15,
+  "trunk_sway_amplitude_m": -1,
+  "envelope": {
+    "shape": "oblate_spheroid",
+    "width_m": 8.0,
+    "height_ratio": 0.9,
+    "top_height_ratio": 1.0
+  },
+  "branching": {
+    "attractor_count": 600,
+    "kill_distance": 0.5,
+    "growth_distance": 0.3,
+    "max_iterations": 300,
+    "branch_angle_jitter_deg": 12.0,
+    "min_attractors_to_split": 3,
+    "tropism_strength": 1.0,
+    "angular_spread_split_deg": 30.0,
+    "crown_base_fraction": 0.35,
+    "min_branch_radius_m": 0.008
+  },
+  "tropisms": {
+    "gravitropism": 0.05,
+    "phototropism": 0.0,
+    "light_dir": [0.0, 0.0, 1.0]
+  },
+  "leaves": {
+    "geometry_type": "bent_cross_cluster",
+    "shape": "oak_lobed",
+    "leaf_size_m": 0.12,
+    "cluster_count_per_tip": 2,
+    "leaf_min_branch_depth": 3,
+    "leaf_density_per_meter": 8.0,
+    "leaf_depth_density_curve": 1.5,
+    "leaf_phototropic_bias": 0.3,
+    "leaf_bend_half_angle": 0.392699081698724
+  }
+}

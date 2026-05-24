@@ -1,0 +1,52 @@
+{
+  "kind": "tree",
+  "name": "pine_default",
+  "species": "pine",
+  "seed": 0,
+  "height_m": 18.0,
+  "trunk_base_radius_m": 0.4,
+  "taper_exponent": 2.5,
+  "trunk_taper_rate": 0.6,
+  "root_flare_factor": 1.2,
+  "crown_leader_fraction": 0.85,
+  "crown_onset_ramp_fraction": 0.10,
+  "trunk_sway_amplitude_m": -1,
+  "envelope": {
+    "shape": "conical",
+    "width_m": 5.0,
+    "height_ratio": 1.0,
+    "top_height_ratio": 1.0
+  },
+  "branching": {
+    "attractor_count": 400,
+    "kill_distance": 0.6,
+    "growth_distance": 0.4,
+    "max_iterations": 300,
+    "branch_angle_jitter_deg": 8.0,
+    "min_attractors_to_split": 4,
+    "tropism_strength": 1.2,
+    "angular_spread_split_deg": 35.0,
+    "crown_base_fraction": 0.15,
+    "min_branch_radius_m": 0.006
+  },
+  "tropisms": {
+    "gravitropism": 0.02,
+    "phototropism": 0.0,
+    "light_dir": [0.0, 0.0, 1.0]
+  },
+  "leaves": {
+    "geometry_type": "branch_strip",
+    "shape": "pine_needle",
+    "leaf_size_m": 0.08,
+    "cluster_count_per_tip": 12,
+    "leaf_min_branch_depth": 2,
+    "leaf_density_per_meter": 12.0,
+    "leaf_depth_density_curve": 1.0,
+    "leaf_phototropic_bias": 0.2,
+    "strip_width_m": 0.4,
+    "needle_count_per_strip": 8,
+    "needle_spacing_ratio": 0.07,
+    "strip_droop_angle": 0.15,
+    "strip_radius_threshold": 0.02
+  }
+}

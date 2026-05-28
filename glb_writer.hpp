@@ -73,6 +73,7 @@ struct MeshData {
     std::span<const PrimitiveData> primitives;
     int   lod_index          = -1;      // -1 = no _RYNX_LOD extension emitted
     float lod_max_distance_m = 0.0f;    // ignored unless lod_index >= 0
+    float lod_screen_height_px = 0.0f;  // screen-height pixel threshold for LOD selection
 };
 
 namespace glb_detail {
@@ -152,6 +153,7 @@ struct MeshJsonMeta {
     int  prim_count;
     int  lod_index;            // -1 = no _RYNX_LOD emitted
     float lod_max_distance_m;
+    float lod_screen_height_px = 0.0f;
 };
 
 // C6 P4 — forward-only material JSON emitter. Replaces the pop_back() hack
@@ -518,6 +520,8 @@ inline std::string build_json_multi_mesh(
             j += i2s(mm.lod_index);
             j += R"(,"lod_max_distance_m":)";
             j += f2s(mm.lod_max_distance_m);
+            j += R"(,"lod_screen_height_px":)";
+            j += f2s(mm.lod_screen_height_px);
             j += R"(}})";
         }
         j += '}';
@@ -884,7 +888,8 @@ inline bool write_glb_multi_mesh(std::span<const MeshData> meshes,
         meta.first_prim = static_cast<int>(resolved.size());
         meta.prim_count = static_cast<int>(mm.primitives.size());
         meta.lod_index  = mm.lod_index;
-        meta.lod_max_distance_m = mm.lod_max_distance_m;
+        meta.lod_max_distance_m   = mm.lod_max_distance_m;
+        meta.lod_screen_height_px = mm.lod_screen_height_px;
         if (mm.lod_index >= 0) any_lod = true;
         meshes_meta.push_back(meta);
 

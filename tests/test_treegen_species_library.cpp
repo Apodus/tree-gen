@@ -173,9 +173,10 @@ TEST_CASE("[treegen_species_library] 16-entry species x seed golden test + visio
     // All 16 entries must have passed.
     REQUIRE(entries_passed == 16);
 
-    // ---- Vision gate D1: disk size < 50 MB ----
+    // ---- Vision gate D1: disk size < 80 MB ----
+    // Raised from 50→80 MB: C1 P1 crotch cap at all LODs + _RYNX_LOD extension fields.
     INFO("total_glb_bytes=" << total_glb_bytes);
-    REQUIRE(total_glb_bytes < 50u * 1024u * 1024u);
+    REQUIRE(total_glb_bytes < 80u * 1024u * 1024u);
 
     // ---- Vision gate D1: timing WARN ----
     const auto t1 = std::chrono::steady_clock::now();

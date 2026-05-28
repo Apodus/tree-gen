@@ -92,10 +92,11 @@ std::string write_lod_glb(const std::vector<ts::LodOutput>& lods, const char* su
         }
 
         ts::MeshData md{};
-        md.primitives          = std::span<const ts::PrimitiveData>(
+        md.primitives            = std::span<const ts::PrimitiveData>(
             per_lod_prims[li].data(), per_lod_prims[li].size());
-        md.lod_index           = lod.lod_index;
-        md.lod_max_distance_m  = lod.lod_max_distance_m;
+        md.lod_index             = lod.lod_index;
+        md.lod_max_distance_m    = lod.lod_max_distance_m;
+        md.lod_screen_height_px  = lod.lod_screen_height_px;
         meshes.push_back(md);
     }
 

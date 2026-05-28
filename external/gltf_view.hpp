@@ -652,7 +652,9 @@ inline int count_meshes(std::span<const char> bytes) {
 // readable; false otherwise (caller assigns defaults).
 inline bool read_rynx_lod_extension(const jval& mesh_obj,
                                     int& out_lod_index,
-                                    float& out_max_distance_m) {
+                                    float& out_max_distance_m,
+                                    float& out_screen_height_px) {
+    out_screen_height_px = 0.0f;
     auto* exts = mesh_obj.find("extensions");
     if (!exts) return false;
     auto* lod = exts->find("_RYNX_LOD");
@@ -666,6 +668,11 @@ inline bool read_rynx_lod_extension(const jval& mesh_obj,
         if (md->kind == jval::kind_t::num_t) {
             out_max_distance_m = float(md->n);
             any = true;
+        }
+    }
+    if (auto* sh = lod->find("lod_screen_height_px")) {
+        if (sh->kind == jval::kind_t::num_t) {
+            out_screen_height_px = float(sh->n);
         }
     }
     return any;

@@ -2,6 +2,7 @@
 #include "lod_emitter.hpp"
 
 #include "branch_mesh.hpp"
+#include "det_rng.hpp"
 #include "face_budget.hpp"
 #include "leaf_budget.hpp"
 #include "leaf_geometry.hpp"
@@ -13,9 +14,19 @@ namespace treegen {
 
 namespace {
 
-// LOD distance thresholds (C9 defaults; per-species override is a later
-// follow-on). Indexed by lod_index 0..3.
-constexpr float k_lod_max_distance_m[4] = { 25.0f, 60.0f, 120.0f, 200.0f };
+// Screen-height pixel thresholds: L0 used when tree subtends >= 120px;
+// L1 when >= 40px; L2 when >= 15px. Indexed by lod_index 0..2.
+constexpr float k_lod_screen_height_px[3] = { 120.0f, 40.0f, 15.0f };
+
+// Fallback lod_max_distance_m for back-compat with old runtimes that don't
+// read lod_screen_height_px. Reference: 10m tree, 1080p, proj_y ~ 1.0.
+// distance = (ref_h * ref_proj_y * ref_vp_h) / (2 * screen_px)
+constexpr float k_lod_fallback_distance_m[3] = { 45.0f, 135.0f, 360.0f };
+
+// C3-LOD-quality: per-LOD leaf scale factor. Fewer leaves at lower LODs are
+// slightly larger to maintain canopy coverage. Tuned so count*area is approx
+// constant: L1 30%*1.4^2 ~ 59%, L2 10%*2.0^2 ~ 40%.
+constexpr float k_lod_leaf_scale[3] = { 1.0f, 1.4f, 2.0f };
 
 // Per-LOD radial targets — L0 is the base; L1 halves; L2 quarters. L3 ignores
 // radial (it's a billboard stub).
@@ -45,8 +56,9 @@ LodOutput emit_one_bark_lod(const TreeSkeleton&    skel,
                             int                    lod_index)
 {
     const PerOrderRadial target = radial_target_for_lod(lod_index);
-    // P5 — request cull-by-length mask when allocator can't fit budget via
-    // radial-cut alone. Mask is empty if radial-cut suffices.
+    // Request merge-by-length mask when allocator can't fit budget via
+    // radial-cut alone. Merged branches suppress bark but retain skeleton
+    // nodes for leaf placement. Mask is empty if radial-cut suffices.
     std::vector<uint8_t> culled_node_mask;
     const PerOrderRadial actual = allocate_radial_for_lod(
         skel, budget_for_lod(budget, lod_index), target, &culled_node_mask);
@@ -57,7 +69,7 @@ LodOutput emit_one_bark_lod(const TreeSkeleton&    skel,
     opts.radial_seg_order2      = actual.order2;
     opts.radial_seg_order3_plus = actual.order3plus;
     opts.tree_height_m          = tree_height_m;
-    opts.emit_crotch_cap        = (lod_index == 0); // crotch cap only at L0
+    opts.emit_crotch_cap        = true;
     opts.culled_node_mask       = std::move(culled_node_mask);
 
     BarkMeshOutput bark = build_bark_mesh(skel, opts);
@@ -67,8 +79,9 @@ LodOutput emit_one_bark_lod(const TreeSkeleton&    skel,
     lod.indices_u32         = std::move(bark.indices_u32);
     lod.wind_weights_packed = std::move(bark.wind_weights_packed);
     lod.bark_tangents       = std::move(bark.tangents);
-    lod.lod_index           = lod_index;
-    lod.lod_max_distance_m  = k_lod_max_distance_m[lod_index];
+    lod.lod_index            = lod_index;
+    lod.lod_max_distance_m   = k_lod_fallback_distance_m[lod_index];
+    lod.lod_screen_height_px = k_lod_screen_height_px[lod_index];
     return lod;
 }
 
@@ -78,7 +91,8 @@ LodOutput emit_one_bark_lod(const TreeSkeleton&    skel,
 LodOutput emit_billboard_stub_lod(float tree_height_m) {
     LodOutput lod;
     lod.lod_index          = 3;
-    lod.lod_max_distance_m = k_lod_max_distance_m[3];
+    lod.lod_max_distance_m   = 1000.0f; // billboard far distance fallback
+    lod.lod_screen_height_px = 0.0f;    // billboard = coarsest
 
     const float h = std::max(0.1f, tree_height_m);
     const float half_w = 0.5f;        // 1m wide
@@ -184,15 +198,23 @@ std::vector<LodOutput> emit_all_lods(const TreeSkeleton&            skel,
             strip_opts.strip_width_m          = leaf_geom_opts.leaf_size_m > 0.01f
                                                 ? leaf_geom_opts.leaf_size_m * 5.0f : 0.4f;
             strip_opts.strip_droop_angle      = 0.15f;
-            strip_opts.strip_angular_offset   = 0.0f;
 
-            // Per-LOD: L0 = full quality, L1 = single strip only, L2 = single strip + higher threshold.
+            // P4: per-tree angular jitter — breaks visual uniformity across
+            // same-species trees by rotating the strip fan per seed.
+            constexpr float k_pi = 3.14159265358979323846f;
+            pcg32 strip_rng;
+            strip_rng.seed(seed_effective, 0xC3'04'01ULL);
+            strip_opts.strip_angular_offset   = strip_rng.next_float_01() * k_pi;
+
+            // Per-LOD: L0 = full quality, L1/L2 = single strip only.
             float threshold = 0.02f;
             int max_strips = 3;
-            if (i == 1) { max_strips = 1; threshold = 0.03f; }
-            if (i == 2) { max_strips = 1; threshold = 0.05f; }
+            int min_strips = 2;
+            if (i == 1) { min_strips = 1; max_strips = 1; threshold = 0.03f; }
+            if (i == 2) { min_strips = 1; max_strips = 1; threshold = 0.05f; }
 
             strip_opts.strip_radius_threshold = threshold;
+            strip_opts.min_strips_per_segment = min_strips;
             strip_opts.max_strips_per_segment = max_strips;
 
             int min_depth = 2; // same as pine scenario default
@@ -218,8 +240,9 @@ std::vector<LodOutput> emit_all_lods(const TreeSkeleton&            skel,
                 }
 
                 LeafMeshOptions leaf_opts        = leaf_geom_opts;
-                leaf_opts.geometry_type          = alloc.emitted_type;       // post-ladder
-                leaf_opts.cluster_count_per_tip  = alloc.effective_cluster;  // post-ladder
+                leaf_opts.geometry_type          = alloc.emitted_type;
+                leaf_opts.cluster_count_per_tip  = alloc.effective_cluster;
+                leaf_opts.leaf_size_m           *= k_lod_leaf_scale[i];  // C3-LOD-quality
                 LeafMeshOutput leaf_out = build_leaf_mesh(kept_sites, leaf_opts);
 
                 lod.leaf_positions             = std::move(leaf_out.positions);

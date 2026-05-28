@@ -506,10 +506,11 @@ int main(int argc, char** argv) {
                     }
 
                     treegen::MeshData md{};
-                    md.primitives          = std::span<const treegen::PrimitiveData>(
+                    md.primitives            = std::span<const treegen::PrimitiveData>(
                         per_lod_prims[li].data(), per_lod_prims[li].size());
-                    md.lod_index           = lod.lod_index;
-                    md.lod_max_distance_m  = lod.lod_max_distance_m;
+                    md.lod_index             = lod.lod_index;
+                    md.lod_max_distance_m    = lod.lod_max_distance_m;
+                    md.lod_screen_height_px  = lod.lod_screen_height_px;
                     meshes.push_back(md);
                 }
 

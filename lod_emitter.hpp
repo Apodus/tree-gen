@@ -32,6 +32,7 @@ struct LodOutput {
     std::vector<float>    bark_tangents;           // C1 P6 — xyzw packed, 4 floats/vert
     int                   lod_index           = 0;
     float                 lod_max_distance_m  = 0.0f;
+    float                 lod_screen_height_px = 0.0f;
 
     // C5 P3 — per-LOD leaf primitive payload. `has_leaves` gates main.cpp's
     // primitive[1] emission; the leaf-blind 5-arg overload leaves them empty.

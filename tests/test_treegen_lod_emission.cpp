@@ -75,10 +75,11 @@ std::string write_lod_glb(const std::vector<ts::LodOutput>& lods, const char* su
         per_lod_prims[li].push_back(prim);
 
         ts::MeshData md{};
-        md.primitives          = std::span<const ts::PrimitiveData>(
+        md.primitives            = std::span<const ts::PrimitiveData>(
             per_lod_prims[li].data(), per_lod_prims[li].size());
-        md.lod_index           = lod.lod_index;
-        md.lod_max_distance_m  = lod.lod_max_distance_m;
+        md.lod_index             = lod.lod_index;
+        md.lod_max_distance_m    = lod.lod_max_distance_m;
+        md.lod_screen_height_px  = lod.lod_screen_height_px;
         meshes.push_back(md);
     }
 
@@ -116,14 +117,17 @@ TEST_CASE("[treegen_lod_emission] oak emits 3 LODs in one multi-mesh GLB",
     auto lods = ts::emit_all_lods(skel, base_opts, budget, s.tree.height_m, seed_effective);
     REQUIRE(lods.size() == 3u);  // C10: L3 billboard stub suppressed
 
-    // lod_index values are 0..2 and the distance thresholds match the C4 P4
-    // pin (L0=25, L1=60, L2=120).
+    // lod_index values are 0..2; fallback distances are camera-derived from
+    // screen-height pixel thresholds (120/40/15px → 45/135/360m).
     REQUIRE(lods[0].lod_index == 0);
     REQUIRE(lods[1].lod_index == 1);
     REQUIRE(lods[2].lod_index == 2);
-    REQUIRE(lods[0].lod_max_distance_m == Approx(25.0f));
-    REQUIRE(lods[1].lod_max_distance_m == Approx(60.0f));
-    REQUIRE(lods[2].lod_max_distance_m == Approx(120.0f));
+    REQUIRE(lods[0].lod_max_distance_m == Approx(45.0f));
+    REQUIRE(lods[1].lod_max_distance_m == Approx(135.0f));
+    REQUIRE(lods[2].lod_max_distance_m == Approx(360.0f));
+    REQUIRE(lods[0].lod_screen_height_px == Approx(120.0f));
+    REQUIRE(lods[1].lod_screen_height_px == Approx(40.0f));
+    REQUIRE(lods[2].lod_screen_height_px == Approx(15.0f));
 
     // Per-LOD face count within budget.
     const size_t l0_tris = lods[0].indices_u32.size() / 3;
@@ -172,10 +176,12 @@ TEST_CASE("[treegen_lod_emission] oak emits 3 LODs in one multi-mesh GLB",
     for (int mi = 0; mi < 3; ++mi) {
         int   read_idx = -999;
         float read_max = -1.0f;
+        float read_screen_px = -1.0f;
         REQUIRE(rynx::graphics::gltf_view::read_rynx_lod_extension(
-            meshes_node->as_arr()[mi], read_idx, read_max));
+            meshes_node->as_arr()[mi], read_idx, read_max, read_screen_px));
         REQUIRE(read_idx == mi);
         REQUIRE(read_max == Approx(lods[mi].lod_max_distance_m));
+        REQUIRE(read_screen_px == Approx(lods[mi].lod_screen_height_px));
 
         std::vector<rynx::graphics::gltf_view::cpu_mesh> prims;
         std::string err;

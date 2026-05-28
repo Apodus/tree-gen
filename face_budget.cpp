@@ -45,10 +45,10 @@ float branch_length(const TreeSkeleton& skel, size_t node_index) {
 //          (sector ≈ full ring approximation for budget convergence).
 //      Per fork: crotch cap ≈ N_kids tris (1 triangle per adjacent pair).
 //      N_collar is angle-adaptive (2-5); k_n_collar_est=3 covers the mean.
-// `culled` (when non-empty) is length skel.nodes.size(); 1 means "skip this
-// branch entirely" (P5 cull-by-length). Mirroring both contributions matters:
-// underestimate → cull_shortest_branches stops too early → actual mesh
-// overshoots the budget by the un-counted stitches.
+// `culled` (when non-empty) is length skel.nodes.size(); 1 means "merged —
+// skip bark emission, retain for leaf placement". Mirroring both
+// contributions matters: underestimate → merge_shortest_branches stops too
+// early → actual mesh overshoots the budget by the un-counted stitches.
 int estimate_tris(const TreeSkeleton&         skel,
                   const PerOrderRadial&       r,
                   const std::vector<uint8_t>& culled)
@@ -173,22 +173,27 @@ void scale_radial(PerOrderRadial& r, float k) {
     apply(r.order3plus);
 }
 
-// P5 — cull branches by length percentile (shortest first) until estimate
-// fits budget. Trunk (depth 0) is never culled. Returns the cull mask.
-// `out_mask` length == skel.nodes.size(); 1 marks "skip this branch".
+// C2-LOD-quality — merge shortest branches into their parents until tri
+// estimate fits budget. "Merge" = suppress bark emission for the branch
+// (out_mask[i] = 1) but retain the skeleton node for leaf placement. Parent
+// radius is unchanged (silent-cull variant: at L1/L2 distances the silhouette
+// difference from area-conserving merge is imperceptible).
+//
+// Merge-cascade: when all children of a fork are merged, the fork is no
+// longer a fork — no collar mesh or crotch cap is emitted for it. Both
+// build_bark_mesh (zone pruning) and estimate_tris (num_survivors==0 skip)
+// already handle this structurally.
+//
+// Trunk (depth 0 root) is never merged. `out_mask` length ==
+// skel.nodes.size(); 1 marks "merged — skip bark, keep for leaves".
 //
 // Algorithm: collect (length, node_index) for all non-trunk, non-degenerate
-// nodes; sort ascending by length; cull from the front until estimate ≤ budget.
-// Sub-linear convergence per cull because removing one twig saves only its own
-// axial*N*2 tris — so worst case O(N) culls. Re-estimate is O(N), total O(N²)
-// which is fine for N ≤ a few thousand nodes.
-//
-// Optimisation: re-estimate every K=32 culls instead of every cull. K chosen
-// empirically — 32 short twigs ≈ 32*1*3*2 = 192 tris, well within budget noise.
-void cull_shortest_branches(const TreeSkeleton&    skel,
-                            const PerOrderRadial&  r,
-                            int                    budget_tris,
-                            std::vector<uint8_t>&  out_mask)
+// nodes; sort ascending by length; merge from the front until estimate ≤
+// budget. Re-estimate every K=32 merges (32 short twigs ≈ 192 tris).
+void merge_shortest_branches(const TreeSkeleton&    skel,
+                             const PerOrderRadial&  r,
+                             int                    budget_tris,
+                             std::vector<uint8_t>&  out_mask)
 {
     out_mask.assign(skel.nodes.size(), 0u);
 
@@ -212,15 +217,15 @@ void cull_shortest_branches(const TreeSkeleton&    skel,
     });
 
     constexpr int k_recheck_interval = 32;
-    int culled_since_check = 0;
+    int merged_since_check = 0;
     int last_est = estimate_tris(skel, r, out_mask);
     if (last_est <= budget_tris) return;
 
     for (size_t k = 0; k < entries.size(); ++k) {
-        out_mask[entries[k].index] = 1u;
-        ++culled_since_check;
-        if (culled_since_check >= k_recheck_interval) {
-            culled_since_check = 0;
+        out_mask[entries[k].index] = 1u;  // merged: no bark, keep for leaves
+        ++merged_since_check;
+        if (merged_since_check >= k_recheck_interval) {
+            merged_since_check = 0;
             last_est = estimate_tris(skel, r, out_mask);
             if (last_est <= budget_tris) return;
         }
@@ -228,7 +233,7 @@ void cull_shortest_branches(const TreeSkeleton&    skel,
     // Final check covers the tail.
     last_est = estimate_tris(skel, r, out_mask);
     (void)last_est;  // best-effort; if still over budget the trunk dominates
-                    // and there's nothing more we can cull.
+                    // and there's nothing more we can merge.
 }
 
 } // anonymous namespace
@@ -256,10 +261,11 @@ PerOrderRadial allocate_radial_for_lod(const TreeSkeleton&    skel,
         scale_radial(r, k);
     }
 
-    // Still over budget. Preferred path (P5): cull-by-length — caller passed
-    // a mask buffer; fill it with shortest-first culls.
+    // Still over budget. Preferred path: merge-by-length — caller passed
+    // a mask buffer; fill it with shortest-first merges. Merged branches
+    // suppress bark but retain skeleton nodes for leaf placement.
     if (out_culled_node_mask) {
-        cull_shortest_branches(skel, r, budget_tris, *out_culled_node_mask);
+        merge_shortest_branches(skel, r, budget_tris, *out_culled_node_mask);
         return r;
     }
 

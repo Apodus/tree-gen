@@ -20,7 +20,7 @@
 namespace treegen {
 
 struct BarkMeshOptions {
-    float bark_repeat_m          = 1.5f; // V = axial_distance_m / bark_repeat_m
+    float bark_repeat_m          = 1.0f; // V = axial_distance_m / bark_repeat_m
     int   radial_seg_trunk       = 12;   // depth 0
     int   radial_seg_order1      = 8;    // depth 1
     int   radial_seg_order2      = 6;    // depth 2
@@ -32,9 +32,13 @@ struct BarkMeshOptions {
     bool  emit_crotch_cap        = true; // P4 — centroid-fan at fork crotch gaps
     float tree_height_m          = 10.0f; // P3 — wind-weight bake rooted_factor edge1 scale
     float root_flare_factor      = 1.0f; // C12 P4 — widen trunk base rings (1.0 = no flare)
-    // P5 — per-node cull mask (length skel.nodes.size(); 1 = skip branch). When
-    // non-empty, build_bark_mesh skips any branch whose child node is marked.
-    // Source: face_budget's cull-shortest-branches overflow rule.
+    float junction_shoulder_factor = 0.0f; // C1 P1 — parent-approach swell at fork junctions (0 = disabled)
+    // Per-node merge mask (length skel.nodes.size(); 1 = merged into parent).
+    // When non-empty, build_bark_mesh skips bark emission for merged branches.
+    // Merged branches retain their skeleton node for leaf placement — the leaf
+    // pipeline is independent of this mask. Source: face_budget's
+    // merge_shortest_branches overflow rule. Merge-cascade: when all children
+    // of a fork are merged, the fork's collar/crotch geometry is suppressed.
     std::vector<uint8_t> culled_node_mask;
 };
 

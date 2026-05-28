@@ -16,6 +16,9 @@
 #include "../branch_mesh.hpp"
 #include "../face_budget.hpp"
 #include "../glb_writer.hpp"
+#include "../leaf_budget.hpp"
+#include "../leaf_geometry.hpp"
+#include "../leaf_placement.hpp"
 #include "../lod_emitter.hpp"
 #include "../scenario.hpp"
 #include "../skeleton.hpp"
@@ -26,6 +29,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <set>
 #include <span>
 #include <string>
 #include <vector>
@@ -206,17 +210,16 @@ TEST_CASE("[treegen_lod_emission] face_budget allocator stays within budget on o
     ts::TreeSkeleton skel = ts::grow_skeleton(s.tree, seed_effective);
 
     // Aggressive budget — much lower than L2's 1500 — should force the
-    // P5 cull-by-length overflow rule to kick in. The allocator must return a
-    // valid PerOrderRadial + cull mask that (after rebuild) produces a mesh
+    // merge-by-length overflow rule to kick in. The allocator must return a
+    // valid PerOrderRadial + merge mask that (after rebuild) produces a mesh
     // under the budget.
     ts::PerOrderRadial target;  // 12/8/6/4
     std::vector<uint8_t> culled_mask;
     ts::PerOrderRadial actual = ts::allocate_radial_for_lod(skel, 200, target, &culled_mask);
-    REQUIRE(actual.trunk >= 3);  // trunk never culled
+    REQUIRE(actual.trunk >= 3);  // trunk never merged
     REQUIRE(culled_mask.size() == skel.nodes.size());  // mask populated
 
-    // Root node is never culled. C11: depth-0 leader nodes above crown base
-    // are now cullable (depth-inflation fix extended depth-0 into the crown).
+    // Root node is never merged.
     REQUIRE(culled_mask[0] == 0u);
 
     ts::BarkMeshOptions opts;
@@ -233,6 +236,263 @@ TEST_CASE("[treegen_lod_emission] face_budget allocator stays within budget on o
         << " (trunk=" << actual.trunk << " o1=" << actual.order1
         << " o2=" << actual.order2 << " o3+=" << actual.order3plus << ")");
     // Allocator may slightly overshoot at the boundary (N>=3 floor, fork-blend
-    // extra tris, K=32 cull recheck granularity) — allow a small slack.
+    // extra tris, K=32 merge recheck granularity) — allow a small slack.
     REQUIRE(int(tris) <= 300);
+}
+
+// [treegen_branch_merge] — C2-LOD-quality. Pins the branch-merge semantics:
+// merged branches suppress bark emission but retain their skeleton node for
+// leaf placement. Closes the "branch-deletion LOD gap" bug class by
+// establishing that branches are MERGED (not deleted) at lower LODs.
+//
+// Test matrix:
+//   (a) L0 mesh unchanged — merge only fires when budget binds.
+//   (b) L1/L2 merged branches have zero bark tris.
+//   (c) Total tri count ≤ budget.
+//   (d) Leaves on merged branches still appear (leaf pipeline independent).
+//   (e) Merge-cascade: fork with all children merged emits no collar.
+//   (f) Root node is never merged.
+TEST_CASE("[treegen_branch_merge] merged branches suppress bark but retain leaves",
+          "[treegen][treegen_branch_merge]") {
+    namespace tsp = rynx::test_support;
+
+    const auto fixture = tsp::find_repo_file("tools/rynx-treegen/scenarios/c3_oak.json");
+    REQUIRE_FALSE(fixture.empty());
+
+    ts::Scenario s = ts::load_scenario(fixture);
+    const uint64_t seed_effective = 42ull ^ s.scenario_fnv;
+    ts::TreeSkeleton skel = ts::grow_skeleton(s.tree, seed_effective);
+    REQUIRE(skel.nodes.size() > 50u);
+
+    // Generate leaf sites from the full skeleton.
+    auto lp_opts = ts::leaf_placement::options_from_descriptor(s.tree.leaves);
+    auto all_leaf_sites = ts::leaf_placement::generate_leaf_sites(skel, lp_opts, seed_effective);
+    REQUIRE(all_leaf_sites.size() > 30u);
+
+    ts::LodBudget budget;  // defaults: L0=36000, L1=4000, L2=1500
+
+    // ---- (a) Unbounded budget: no branches merged ----
+    // At unbounded budget, radial scaling suffices → merge never fires.
+    {
+        ts::PerOrderRadial target;
+        std::vector<uint8_t> mask;
+        ts::allocate_radial_for_lod(skel, 1 << 24, target, &mask);
+
+        bool any_merged = false;
+        for (uint8_t m : mask) if (m) { any_merged = true; break; }
+        INFO("unbounded: mask.size=" << mask.size() << " any_merged=" << any_merged);
+        REQUIRE_FALSE(any_merged);
+    }
+
+    // ---- (a2) L0 mesh: merge only fires if natural mesh exceeds budget ----
+    // The actual L0 mesh may or may not need merging (dense oak can exceed
+    // 36k at full radials). Either way, the output must be within budget.
+    {
+        ts::PerOrderRadial target;
+        std::vector<uint8_t> mask;
+        ts::PerOrderRadial actual = ts::allocate_radial_for_lod(
+            skel, budget.l0_tris, target, &mask);
+
+        ts::BarkMeshOptions opts;
+        opts.tree_height_m          = s.tree.height_m;
+        opts.radial_seg_trunk       = actual.trunk;
+        opts.radial_seg_order1      = actual.order1;
+        opts.radial_seg_order2      = actual.order2;
+        opts.radial_seg_order3_plus = actual.order3plus;
+        opts.culled_node_mask       = mask;
+
+        ts::BarkMeshOutput bark = ts::build_bark_mesh(skel, opts);
+        const size_t tris = bark.indices_u32.size() / 3;
+        INFO("L0: bark_tris=" << tris << " budget=" << budget.l0_tris);
+        REQUIRE(int(tris) <= budget.l0_tris);
+    }
+
+    // ---- (b-c) L1: merged branches produce zero bark, total ≤ budget ----
+    {
+        const ts::PerOrderRadial target = {6, 4, 3, 3}; // L1 radial targets
+        std::vector<uint8_t> mask;
+        ts::PerOrderRadial actual = ts::allocate_radial_for_lod(
+            skel, budget.l1_tris, target, &mask);
+
+        // Count merged nodes.
+        int merged_count = 0;
+        for (size_t i = 0; i < mask.size(); ++i)
+            if (mask[i]) ++merged_count;
+        INFO("L1: merged_count=" << merged_count << "/" << skel.nodes.size());
+        // At L1=4000 tris, some branches should be merged for a dense oak.
+        // (Not a hard requirement — sparse species may not need merging.)
+
+        // (f) Root is never merged.
+        if (!mask.empty()) {
+            REQUIRE(mask[0] == 0u);
+        }
+
+        // Build bark mesh with merge mask.
+        ts::BarkMeshOptions opts;
+        opts.tree_height_m          = s.tree.height_m;
+        opts.radial_seg_trunk       = actual.trunk;
+        opts.radial_seg_order1      = actual.order1;
+        opts.radial_seg_order2      = actual.order2;
+        opts.radial_seg_order3_plus = actual.order3plus;
+        opts.culled_node_mask       = mask;
+
+        ts::BarkMeshOutput bark = ts::build_bark_mesh(skel, opts);
+        const size_t tris = bark.indices_u32.size() / 3;
+        INFO("L1: bark_tris=" << tris << " budget=" << budget.l1_tris);
+        // (c) Total ≤ budget.
+        REQUIRE(int(tris) <= budget.l1_tris);
+
+        // (b) Merged branches have zero bark vertices. Check that no vertex
+        // in the output mesh references a merged node index.
+        if (merged_count > 0) {
+            std::set<int> merged_nodes;
+            for (size_t i = 0; i < mask.size(); ++i)
+                if (mask[i]) merged_nodes.insert(static_cast<int>(i));
+
+            for (int vni : bark.per_vertex_node_index) {
+                INFO("vert references merged node " << vni);
+                REQUIRE(merged_nodes.find(vni) == merged_nodes.end());
+            }
+        }
+    }
+
+    // ---- (d) Leaves on merged branches still appear ----
+    // The leaf pipeline receives all_leaf_sites (generated from the full
+    // skeleton). Leaf sites with branch_id matching merged nodes must be
+    // present in the output — the merge mask does NOT filter leaf sites.
+    {
+        const ts::PerOrderRadial target = {3, 3, 3, 3}; // L2 radial targets
+        std::vector<uint8_t> mask;
+        ts::allocate_radial_for_lod(skel, budget.l2_tris, target, &mask);
+
+        // Collect branch_ids of leaf sites on merged branches.
+        std::set<int> merged_nodes;
+        for (size_t i = 0; i < mask.size(); ++i)
+            if (mask[i]) merged_nodes.insert(static_cast<int>(i));
+
+        int leaf_sites_on_merged = 0;
+        for (const auto& site : all_leaf_sites) {
+            if (merged_nodes.count(site.branch_id)) ++leaf_sites_on_merged;
+        }
+        INFO("L2: merged_nodes=" << merged_nodes.size()
+             << " leaf_sites_on_merged=" << leaf_sites_on_merged
+             << " total_leaf_sites=" << all_leaf_sites.size());
+
+        // For a dense oak at L2, some branches are merged and some of those
+        // branches carry leaf sites. The leaf pipeline must include them.
+        if (!merged_nodes.empty()) {
+            // At least some leaf sites should exist on merged branches (oak
+            // is a dense species — branches that carry leaves get merged at
+            // L2's tight budget).
+            REQUIRE(leaf_sites_on_merged > 0);
+        }
+
+        // Run the leaf-aware LOD emitter — the leaf output must include sites
+        // from merged branches. The allocator sub-samples by PCG32 rank, not
+        // by merge status.
+        ts::BarkMeshOptions bark_opts;
+        bark_opts.tree_height_m   = s.tree.height_m;
+        bark_opts.seam_offset_rad = 0.0f;
+
+        ts::LeafBudget leaf_budget;
+        ts::LeafMeshOptions leaf_geom_opts;
+        leaf_geom_opts.geometry_type         = s.tree.leaves.geometry_type;
+        leaf_geom_opts.shape                 = s.tree.leaves.shape;
+        leaf_geom_opts.leaf_size_m           = s.tree.leaves.leaf_size_m;
+        leaf_geom_opts.cluster_count_per_tip = s.tree.leaves.cluster_count_per_tip;
+        leaf_geom_opts.bend_half_angle       = s.tree.leaves.leaf_bend_half_angle;
+
+        auto lods = ts::emit_all_lods(skel, all_leaf_sites, bark_opts, budget,
+                                      leaf_budget, leaf_geom_opts,
+                                      s.tree.height_m, seed_effective);
+        REQUIRE(lods.size() == 3u);
+
+        // L2 must have leaves — the leaf pipeline is independent of bark merge.
+        REQUIRE(lods[2].has_leaves);
+        const size_t l2_leaf_tris = lods[2].leaf_indices_u32.size() / 3;
+        INFO("L2: leaf_tris=" << l2_leaf_tris);
+        REQUIRE(l2_leaf_tris > 0u);
+    }
+}
+
+// [treegen_branch_merge] — merge-cascade: when all children of a fork are
+// merged, the fork zone is pruned and emits no collar/crotch geometry. Tests
+// that the estimator and the mesh builder agree on the cascade.
+TEST_CASE("[treegen_branch_merge] merge cascade prunes empty fork zones",
+          "[treegen][treegen_branch_merge]") {
+    namespace tsp = rynx::test_support;
+
+    const auto fixture = tsp::find_repo_file("tools/rynx-treegen/scenarios/c3_oak.json");
+    REQUIRE_FALSE(fixture.empty());
+
+    ts::Scenario s = ts::load_scenario(fixture);
+    const uint64_t seed_effective = 42ull ^ s.scenario_fnv;
+    ts::TreeSkeleton skel = ts::grow_skeleton(s.tree, seed_effective);
+
+    // Use a very tight budget to force heavy merging.
+    ts::PerOrderRadial target;  // 12/8/6/4
+    std::vector<uint8_t> mask;
+    ts::PerOrderRadial actual = ts::allocate_radial_for_lod(skel, 300, target, &mask);
+    REQUIRE(mask.size() == skel.nodes.size());
+
+    // Identify fork nodes (nodes with >1 child).
+    std::vector<int> child_count(skel.nodes.size(), 0);
+    for (size_t i = 1; i < skel.nodes.size(); ++i) {
+        int p = skel.nodes[i].parent_index;
+        if (p >= 0) ++child_count[static_cast<size_t>(p)];
+    }
+
+    // Count forks whose ALL children are merged — these are cascade forks.
+    int cascade_forks = 0;
+    int total_forks = 0;
+    for (size_t i = 0; i < skel.nodes.size(); ++i) {
+        if (child_count[i] < 2) continue;
+        ++total_forks;
+
+        bool all_children_merged = true;
+        for (size_t j = 1; j < skel.nodes.size(); ++j) {
+            if (skel.nodes[j].parent_index == static_cast<int>(i)) {
+                if (!mask[j]) { all_children_merged = false; break; }
+            }
+        }
+        if (all_children_merged) ++cascade_forks;
+    }
+    INFO("total_forks=" << total_forks << " cascade_forks=" << cascade_forks);
+
+    // At budget=300 with a dense oak, many forks should cascade.
+    REQUIRE(cascade_forks > 0);
+
+    // Build bark mesh — cascaded forks should not contribute collar geometry.
+    ts::BarkMeshOptions opts;
+    opts.tree_height_m          = s.tree.height_m;
+    opts.radial_seg_trunk       = actual.trunk;
+    opts.radial_seg_order1      = actual.order1;
+    opts.radial_seg_order2      = actual.order2;
+    opts.radial_seg_order3_plus = actual.order3plus;
+    opts.culled_node_mask       = mask;
+
+    ts::BarkMeshOutput bark = ts::build_bark_mesh(skel, opts);
+    const size_t tris = bark.indices_u32.size() / 3;
+    INFO("budget=300 actual_tris=" << tris);
+    // Mesh should be within budget (with the small slack from N>=3 floor).
+    REQUIRE(int(tris) <= 400);
+
+    // Verify no collar ring metadata references a cascade fork node.
+    std::set<int> cascade_fork_nodes;
+    for (size_t i = 0; i < skel.nodes.size(); ++i) {
+        if (child_count[i] < 2) continue;
+        bool all_merged = true;
+        for (size_t j = 1; j < skel.nodes.size(); ++j) {
+            if (skel.nodes[j].parent_index == static_cast<int>(i)) {
+                if (!mask[j]) { all_merged = false; break; }
+            }
+        }
+        if (all_merged) cascade_fork_nodes.insert(static_cast<int>(i));
+    }
+    for (const auto& rm : bark.ring_metadata) {
+        if (rm.collar_fork_node >= 0) {
+            INFO("collar ring references cascade-pruned fork " << rm.collar_fork_node);
+            REQUIRE(cascade_fork_nodes.find(rm.collar_fork_node) == cascade_fork_nodes.end());
+        }
+    }
 }

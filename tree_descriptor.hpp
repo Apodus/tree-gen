@@ -71,6 +71,7 @@ struct TreeDescriptor {
 
     float trunk_taper_rate    = 0.7f; // linear taper on pre-seeded trunk chain: r(z) = trunk_base * lerp(1.0, trunk_taper_rate, z/crown_base_z)
     float root_flare_factor   = 1.3f; // C12 — widen trunk base rings (1.0 = no flare); cubic ease-in over 3 rings
+    float junction_shoulder_factor = 0.15f; // C1 — parent-approach swell at fork junctions (0 = disabled)
 
     // C11 — trunk structure params
     float crown_leader_fraction       = 0.5f;  // fraction of crown height where depth-0 leader persists

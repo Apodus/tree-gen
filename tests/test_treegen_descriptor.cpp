@@ -53,6 +53,8 @@ bool descriptor_equal(const treegen::TreeDescriptor& a, const treegen::TreeDescr
     if (!float_eq(a.branching.min_branch_radius_m, b.branching.min_branch_radius_m)) return false;
 
     if (!float_eq(a.trunk_taper_rate, b.trunk_taper_rate)) return false;
+    if (!float_eq(a.root_flare_factor, b.root_flare_factor)) return false;
+    if (!float_eq(a.junction_shoulder_factor, b.junction_shoulder_factor)) return false;
 
     if (!float_eq(a.tropisms.gravitropism, b.tropisms.gravitropism)) return false;
     if (!float_eq(a.tropisms.phototropism, b.tropisms.phototropism)) return false;

@@ -11,12 +11,11 @@
 //      per-order radial count.
 //   2. If estimate > budget, multiply every order's radial by sqrt(budget/est),
 //      clamped to ≥3. Re-estimate; iterate up to 3 passes.
-//   3. P5 — if still over budget after radial cut: cull branches by length
-//      percentile (shortest first). Twigs are short; trunk is longest. Sort
-//      non-trunk nodes ascending by branch length; mark shortest as culled
-//      until estimate fits. Preserves silhouette by construction (long
-//      structural branches survive) — strictly better than P4's
-//      "cull all of order3+, then all of order2, then all of order1".
+//   3. C2-LOD-quality — if still over budget after radial cut: merge shortest
+//      branches into their parents. Merged branches suppress bark emission
+//      but retain the skeleton node for leaf placement (silent-cull variant).
+//      Sort non-trunk nodes ascending by branch length; merge shortest first
+//      until estimate fits. Long structural branches survive by construction.
 #pragma once
 
 #include "skeleton.hpp"
@@ -47,10 +46,13 @@ struct PerOrderRadial {
 // Allocate per-order radial segment counts to hit `budget_tris`. Returns the
 // adjusted counts. If radial cut alone cannot fit budget, fills
 // `out_culled_node_mask` (length == skel.nodes.size()) with 1 at indices to
-// cull (shortest branches first). Trunk (depth 0) is never culled. Caller
-// (lod_emitter / build_bark_mesh) checks the mask and skips culled nodes.
+// merge (shortest branches first). Merged branches suppress bark emission but
+// retain the skeleton node for leaf placement — leaves on merged branches
+// still appear (the leaf pipeline is independent of the bark merge mask).
+// Trunk (depth 0 root) is never merged. Merge-cascade: when all children of
+// a fork are merged, the fork's collar/crotch geometry is also suppressed.
 //
-// When `out_culled_node_mask` is null and the cull rule fires, falls back to
+// When `out_culled_node_mask` is null and the merge rule fires, falls back to
 // the legacy per-order cull (drop entire orders) so existing API consumers
 // keep working without the mask plumbing.
 PerOrderRadial allocate_radial_for_lod(const TreeSkeleton&    skel,

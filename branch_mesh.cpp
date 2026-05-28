@@ -34,6 +34,20 @@ void build_basis(vec3 axis, vec3& out_right, vec3& out_up) {
     out_up    = cross(axis, out_right); // already unit
 }
 
+// Project prev_right onto the plane perpendicular to new_axis, preserving angular
+// continuity across direction changes (Bishop frame / parallel transport).
+vec3 parallel_transport(vec3 prev_right, vec3 new_axis) {
+    new_axis = normalized(new_axis);
+    const vec3 projected = prev_right - new_axis * dot(prev_right, new_axis);
+    const float len = length(projected);
+    if (len < 1e-6f) {
+        vec3 r, u;
+        build_basis(new_axis, r, u);
+        return r;
+    }
+    return projected * (1.0f / len);
+}
+
 // Emit one ring of (N+1) verts (seam-duplicated) at `center` orthogonal to
 // `axis`, radius `radius`, axial param `v_axial`. Returns starting vertex
 // index.
@@ -43,14 +57,14 @@ int emit_ring(cpu_mesh_out& mesh,
               int node_index,
               vec3 center,
               vec3 axis,
+              vec3 right,
+              vec3 up,
               float radius,
               int N,
               float v_axial,
               float seam_offset_rad)
 {
-    vec3 right, up;
-    build_basis(axis, right, up);
-
+    (void)axis; // basis supplied explicitly; axis retained for call-site readability.
     int start = static_cast<int>(mesh.positions.size() / 3);
     constexpr float k_2pi = 6.28318530717958647692f;
 
@@ -131,11 +145,11 @@ BarkMeshOutput build_bark_mesh(const TreeSkeleton& skel, const BarkMeshOptions& 
 
     // C12 P2 — per-node: vert_start of the last ring emitted for the segment
     // terminating at that node + its radial segment count. -1 = not yet emitted.
-    struct LastRing { int vert_start = -1; int N = 0; };
+    struct LastRing { int vert_start = -1; int N = 0; vec3 right = {0,0,0}; };
     std::vector<LastRing> last_ring_at_node(static_cast<size_t>(node_count));
 
     for (int i = 1; i < node_count; ++i) {
-        // P5 — per-node cull mask (face_budget's cull-by-length overflow rule).
+        // Per-node merge mask (face_budget's merge-by-length overflow rule).
         if (!opts.culled_node_mask.empty() && opts.culled_node_mask[size_t(i)]) continue;
 
         const auto& node = skel.nodes[i];
@@ -165,6 +179,18 @@ BarkMeshOutput build_bark_mesh(const TreeSkeleton& skel, const BarkMeshOptions& 
             prev_ring_start = parent_lr.vert_start;
         }
 
+        // Compute basis for this segment. If continuation-merged, transport
+        // from the parent's basis to maintain angular coherence across the
+        // direction change. Otherwise, fresh basis via build_basis.
+        vec3 seg_right, seg_up;
+        if (can_merge) {
+            const vec3& parent_right = last_ring_at_node[static_cast<size_t>(node.parent_index)].right;
+            seg_right = parallel_transport(parent_right, seg_dir);
+            seg_up = cross(seg_dir, seg_right);
+        } else {
+            build_basis(seg_dir, seg_right, seg_up);
+        }
+
         for (int s = s_start; s <= axial_segs; ++s) {
             const float t = static_cast<float>(s) / static_cast<float>(axial_segs);
             const vec3  center = parent.position + seg_dir * (seg_len * t);
@@ -183,8 +209,26 @@ BarkMeshOutput build_bark_mesh(const TreeSkeleton& skel, const BarkMeshOptions& 
                 }
             }
 
+            // C1 P1 — junction shoulder swell: widen the last ~30% of rings
+            // approaching a fork node (child_count >= 2). Smoothstep taper
+            // from normal radius to shoulder_radius, clamped to parent radius.
+            if (opts.junction_shoulder_factor > 0.0f && child_count[static_cast<size_t>(i)] >= 2) {
+                constexpr float k_swell_onset = 0.7f;
+                if (t >= k_swell_onset) {
+                    float shoulder_radius = node.radius * (1.0f + opts.junction_shoulder_factor);
+                    shoulder_radius = std::min(shoulder_radius, parent.radius);
+                    const float swell_t = (t - k_swell_onset) / (1.0f - k_swell_onset);
+                    const float smooth = swell_t * swell_t * (3.0f - 2.0f * swell_t);
+                    const float swelled = flared_radius + (shoulder_radius - flared_radius) * smooth;
+                    if (swelled > flared_radius) {
+                        flared_radius = swelled;
+                    }
+                }
+            }
+
             const int ring_start = emit_ring(mesh, out.tangents, vert_node_idx, i, center, seg_dir,
-                                             flared_radius, N, v_axial, opts.seam_offset_rad);
+                                             seg_right, seg_up, flared_radius, N, v_axial,
+                                             opts.seam_offset_rad);
 
             RingMetadata rm;
             rm.branch_node_index = i;
@@ -203,7 +247,7 @@ BarkMeshOutput build_bark_mesh(const TreeSkeleton& skel, const BarkMeshOptions& 
         }
 
         // Record last ring for potential downstream continuation merge.
-        last_ring_at_node[static_cast<size_t>(i)] = { prev_ring_start, N };
+        last_ring_at_node[static_cast<size_t>(i)] = { prev_ring_start, N, seg_right };
 
         // C12 P3 — tip end-caps: triangle fan for leaf nodes (no children).
         if (child_count[static_cast<size_t>(i)] == 0 && prev_ring_start >= 0) {
@@ -219,12 +263,10 @@ BarkMeshOutput build_bark_mesh(const TreeSkeleton& skel, const BarkMeshOptions& 
             mesh.normals.push_back(tip_n.z);
             mesh.uvs.push_back(0.5f);
             mesh.uvs.push_back(0.5f);
-            // C1 P6 — tip-cap tangent: ring's right basis vector.
-            vec3 tip_right, tip_up;
-            build_basis(seg_dir, tip_right, tip_up);
-            out.tangents.push_back(tip_right.x);
-            out.tangents.push_back(tip_right.y);
-            out.tangents.push_back(tip_right.z);
+            // Tip-cap tangent: ring's right basis vector (segment basis still in scope).
+            out.tangents.push_back(seg_right.x);
+            out.tangents.push_back(seg_right.y);
+            out.tangents.push_back(seg_right.z);
             out.tangents.push_back(1.0f);
             vert_node_idx.push_back(i);
 
@@ -242,13 +284,13 @@ BarkMeshOutput build_bark_mesh(const TreeSkeleton& skel, const BarkMeshOptions& 
 
     if (opts.apply_fork_blend) {
         auto zones = collect_fork_zones(skel, opts.fork_zone_factor);
-        // P5 — strip culled children from each fork's child_indices so the
-        // angular Voronoi partition only allocates parent rim arc to children
-        // that actually emit a ring. After the strip a zone with 1 surviving
-        // child is still valid (sector == full parent rim, manifold by
-        // construction). A zone with 0 surviving children is no longer a fork
-        // at all and would crash apply_skin_rim_blend's Voronoi assignment
-        // (N_k==0 → empty cands → front() UB), so we drop those zones here.
+        // Strip merged children from each fork's child_indices so the angular
+        // Voronoi partition only allocates parent rim arc to children that
+        // actually emit bark. Merge-cascade: a zone with 0 surviving children
+        // is no longer a fork → no collar/crotch geometry emitted, saving tri
+        // budget for forks with surviving children. A zone with 1 surviving
+        // child remains valid (sector == full parent rim, manifold by
+        // construction).
         if (!opts.culled_node_mask.empty()) {
             for (auto& z : zones) {
                 z.child_indices.erase(

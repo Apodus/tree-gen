@@ -38,6 +38,20 @@ void build_basis(vec3 axis, vec3& out_right, vec3& out_up) {
     out_up    = cross(axis, out_right);
 }
 
+// Project prev_right onto the plane perpendicular to new_axis, preserving angular
+// continuity across direction changes (Bishop frame / parallel transport).
+vec3 parallel_transport(vec3 prev_right, vec3 new_axis) {
+    new_axis = normalized(new_axis);
+    const vec3 projected = prev_right - new_axis * dot(prev_right, new_axis);
+    const float len = length(projected);
+    if (len < 1e-6f) {
+        vec3 r, u;
+        build_basis(new_axis, r, u);
+        return r;
+    }
+    return projected * (1.0f / len);
+}
+
 inline vec3 get_pos(const cpu_mesh_out& mesh, int vert_idx) {
     return {
         mesh.positions[static_cast<size_t>(vert_idx) * 3 + 0],
@@ -247,13 +261,13 @@ int emit_collar_ring(BarkMeshOutput& bark,
                      int node_index,
                      vec3 center,
                      vec3 axis,
+                     vec3 right,
+                     vec3 up,
                      float radius,
                      int N,
                      float v_axial,
                      float seam_offset_rad) {
-    vec3 right, up;
-    build_basis(axis, right, up);
-
+    (void)axis; // basis supplied explicitly; axis retained for call-site readability.
     auto& mesh = bark.mesh;
     const int start = static_cast<int>(mesh.positions.size() / 3);
 
@@ -389,25 +403,41 @@ void apply_skin_rim_blend(BarkMeshOutput& bark,
             const int n_collar = compute_n_collar(parent_axis, child_dir);
             const float collar_d = std::min(zone_length, seg_len);
 
+            float shoulder_r0 = fork_n.radius;
+            if (opts.junction_shoulder_factor > 0.0f) {
+                shoulder_r0 = fork_n.radius * (1.0f + opts.junction_shoulder_factor);
+                shoulder_r0 = std::min(shoulder_r0, fork_parent.radius);
+            }
+
             CollarCurve curve;
             curve.p0     = fork_n.position;
             curve.p1     = fork_n.position + child_dir * collar_d;
             curve.t0_dir = parent_axis;
             curve.t1_dir = child_dir;
-            curve.r0     = fork_n.radius;
+            curve.r0     = shoulder_r0;
             curve.r1     = fork_n.radius + (child_n.radius - fork_n.radius) * (collar_d / seg_len);
+            curve.shoulder_hold = (opts.junction_shoulder_factor > 0.0f) ? 0.3f : 0.0f;
 
             // Emit collar rings at t_k = (k+1) / (n_collar+1), k=0..n_collar-1.
+            // Propagate basis via parallel transport from parent_axis through
+            // each collar tangent to avoid twist between consecutive rings.
             int prev_ring_start = -1;
             int first_collar_vert_start = -1;
+
+            vec3 collar_right, collar_up;
+            build_basis(parent_axis, collar_right, collar_up);
 
             for (int ci = 0; ci < n_collar; ++ci) {
                 const float t = static_cast<float>(ci + 1) / static_cast<float>(n_collar + 1);
                 const CollarSample sample = eval_collar_curve(curve, t);
                 const float v_axial = length(sample.position - curve.p0) / opts.bark_repeat_m;
 
+                // Transport basis to this collar ring's tangent direction.
+                collar_right = parallel_transport(collar_right, sample.tangent);
+                collar_up = cross(normalized(sample.tangent), collar_right);
+
                 const int ring_start = emit_collar_ring(bark, child_node,
-                    sample.position, sample.tangent, sample.radius,
+                    sample.position, sample.tangent, collar_right, collar_up, sample.radius,
                     N_p, v_axial, opts.seam_offset_rad);
 
                 if (ci == 0) first_collar_vert_start = ring_start;

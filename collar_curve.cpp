@@ -59,9 +59,16 @@ CollarSample eval_collar_curve(const CollarCurve& c, float t) {
     const vec3 deriv = c.p0 * dh00 + T0s * dh10 + c.p1 * dh01 + T1s * dh11;
     const vec3 tang = normalized(deriv);
 
-    // Smoothstep radius blend.
-    const float s = smoothstep01(t);
-    const float radius = c.r0 + (c.r1 - c.r0) * s;
+    // Shoulder-hold-aware radius blend.
+    float radius;
+    if (t <= c.shoulder_hold) {
+        radius = c.r0;
+    } else {
+        const float denom = 1.0f - c.shoulder_hold;
+        const float t_remap = (denom > k_eps) ? (t - c.shoulder_hold) / denom : 1.0f;
+        const float s = smoothstep01(t_remap);
+        radius = c.r0 + (c.r1 - c.r0) * s;
+    }
 
     return { pos, tang, radius };
 }

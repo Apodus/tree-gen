@@ -256,3 +256,56 @@ TEST_CASE("[treegen_collar_curve] determinism",
         REQUIRE(a.radius     == b.radius);
     }
 }
+
+// ---------- shoulder hold ----------
+
+TEST_CASE("[treegen_collar_shoulder_hold] hold zone radius equals r0",
+          "[treegen][treegen_collar_shoulder_hold]") {
+    ts::CollarCurve c;
+    c.p0 = {0, 0, 0}; c.p1 = {0, 0, 1};
+    c.t0_dir = {0, 0, 1}; c.t1_dir = {0, 0, 1};
+    c.r0 = 0.5f; c.r1 = 0.2f;
+    c.shoulder_hold = 0.3f;
+
+    for (int i = 0; i <= 30; ++i) {
+        const float t = static_cast<float>(i) / 100.0f;
+        auto s = ts::eval_collar_curve(c, t);
+        INFO("t=" << t << " radius=" << s.radius);
+        REQUIRE(s.radius == Approx(0.5f).margin(1e-6f));
+    }
+}
+
+TEST_CASE("[treegen_collar_shoulder_hold] taper zone blends r0 to r1",
+          "[treegen][treegen_collar_shoulder_hold]") {
+    ts::CollarCurve c;
+    c.p0 = {0, 0, 0}; c.p1 = {0, 0, 1};
+    c.t0_dir = {0, 0, 1}; c.t1_dir = {0, 0, 1};
+    c.r0 = 0.5f; c.r1 = 0.2f;
+    c.shoulder_hold = 0.3f;
+
+    auto s_hold_end = ts::eval_collar_curve(c, 0.3f);
+    REQUIRE(s_hold_end.radius == Approx(0.5f).margin(1e-6f));
+
+    auto s_end = ts::eval_collar_curve(c, 1.0f);
+    REQUIRE(s_end.radius == Approx(0.2f).margin(1e-5f));
+
+    auto s_mid = ts::eval_collar_curve(c, 0.65f);
+    REQUIRE(s_mid.radius == Approx(0.35f).margin(1e-5f));
+}
+
+TEST_CASE("[treegen_collar_shoulder_hold] hold=0 matches legacy smoothstep",
+          "[treegen][treegen_collar_shoulder_hold]") {
+    ts::CollarCurve c;
+    c.p0 = {0, 0, 0}; c.p1 = {1, 0, 1};
+    c.t0_dir = {0, 0, 1}; c.t1_dir = {1, 0, 0};
+    c.r0 = 0.3f; c.r1 = 0.1f;
+    c.shoulder_hold = 0.0f;
+
+    auto s = ts::eval_collar_curve(c, 0.5f);
+    REQUIRE(s.radius == Approx(0.2f).margin(1e-5f));
+
+    auto s0 = ts::eval_collar_curve(c, 0.0f);
+    REQUIRE(s0.radius == Approx(0.3f).margin(1e-5f));
+    auto s1 = ts::eval_collar_curve(c, 1.0f);
+    REQUIRE(s1.radius == Approx(0.1f).margin(1e-5f));
+}

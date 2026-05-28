@@ -330,6 +330,7 @@ int main(int argc, char** argv) {
                 treegen::BarkMeshOptions bopts;
                 bopts.tree_height_m      = s.tree.height_m;
                 bopts.root_flare_factor  = s.tree.root_flare_factor; // C12 P4
+                bopts.junction_shoulder_factor = s.tree.junction_shoulder_factor; // C1 P1
                 // Per-tree seam rotation: deterministic from seed_effective.
                 treegen::pcg32 rng;
                 rng.seed(seed_effective, 0x5EA00FF5E7u /* "seam offset" stream */);

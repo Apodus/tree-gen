@@ -8,6 +8,7 @@
   "taper_exponent": 2.0,
   "trunk_taper_rate": 0.7,
   "root_flare_factor": 1.3,
+  "junction_shoulder_factor": 0.18,
   "crown_leader_fraction": 0.5,
   "crown_onset_ramp_fraction": 0.15,
   "trunk_sway_amplitude_m": -1,

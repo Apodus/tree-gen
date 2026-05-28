@@ -173,6 +173,7 @@ TreeDescriptor parse_tree_descriptor(const json::value& obj) {
 
     if (auto v = json::get_number(obj, "trunk_taper_rate"))   td.trunk_taper_rate   = static_cast<float>(*v);
     if (auto v = json::get_number(obj, "root_flare_factor")) td.root_flare_factor = static_cast<float>(*v);
+    if (auto v = json::get_number(obj, "junction_shoulder_factor")) td.junction_shoulder_factor = static_cast<float>(*v);
 
     // C11 — trunk structure params
     if (auto v = json::get_number(obj, "crown_leader_fraction"))     td.crown_leader_fraction     = static_cast<float>(*v);
@@ -221,6 +222,7 @@ std::string serialize_tree_descriptor(const TreeDescriptor& td) {
     indent(out, 1); out += "\"taper_exponent\": "; emit_float(out, td.taper_exponent); out += ",\n";
     indent(out, 1); out += "\"trunk_taper_rate\": "; emit_float(out, td.trunk_taper_rate); out += ",\n";
     indent(out, 1); out += "\"root_flare_factor\": "; emit_float(out, td.root_flare_factor); out += ",\n";
+    indent(out, 1); out += "\"junction_shoulder_factor\": "; emit_float(out, td.junction_shoulder_factor); out += ",\n";
     indent(out, 1); out += "\"crown_leader_fraction\": "; emit_float(out, td.crown_leader_fraction); out += ",\n";
     indent(out, 1); out += "\"crown_onset_ramp_fraction\": "; emit_float(out, td.crown_onset_ramp_fraction); out += ",\n";
     indent(out, 1); out += "\"trunk_sway_amplitude_m\": "; emit_float(out, td.trunk_sway_amplitude_m); out += ",\n";

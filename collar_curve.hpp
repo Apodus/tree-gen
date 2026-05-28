@@ -13,6 +13,7 @@ struct CollarCurve {
     vec3  t1_dir;   // end tangent direction (normalized internally)
     float r0;       // start radius
     float r1;       // end radius
+    float shoulder_hold = 0.0f;
 };
 
 struct CollarSample {

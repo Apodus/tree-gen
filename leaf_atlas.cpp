@@ -26,10 +26,10 @@ namespace treegen {
         // tone range without per-cell sampling for now.
         struct LinearRgb { float r, g, b; };
         constexpr LinearRgb k_leaf_color[4] = {
-            /* OakLobed      */ { 0.30f, 0.55f, 0.18f },
+            /* OakLobed      */ { 0.20f, 0.38f, 0.12f },
             /* PineNeedle    */ { 0.10f, 0.30f, 0.12f },
-            /* BirchSerrated */ { 0.55f, 0.70f, 0.30f },
-            /* MapleStar     */ { 0.45f, 0.55f, 0.20f },
+            /* BirchSerrated */ { 0.35f, 0.50f, 0.18f },
+            /* MapleStar     */ { 0.30f, 0.38f, 0.14f },
         };
         static_assert(int(LeafShape::OakLobed)      == 0, "k_leaf_color index pinned to LeafShape enum order");
         static_assert(int(LeafShape::PineNeedle)    == 1, "k_leaf_color index pinned to LeafShape enum order");
@@ -266,8 +266,8 @@ namespace treegen {
         }
 
         // ---- Needle-strip cell bake (C3-needle-strips P1) ----
-        // 8 parallel tapered needles, perpendicular to V-axis.
-        // Each needle spans the full V (vertical) range; needles tile across U.
+        // 8 parallel tapered needles slotted along V (branch axis).
+        // Each needle extends across U (strip width, perpendicular to branch).
         // Needle body alpha=255, gaps alpha=0.
 
         struct NeedleStripParams {
@@ -291,27 +291,27 @@ namespace treegen {
                     const float v = (static_cast<float>(y) - pad) / usable;
                     if (u < 0.0f || u > 1.0f || v < 0.0f || v > 1.0f) continue;
 
-                    // Which needle slot?
-                    const float slot_f = u / pitch;
+                    // Which needle slot (slotted along V)?
+                    const float slot_f = v / pitch;
                     const int slot = static_cast<int>(slot_f);
                     if (slot >= N) continue;
-                    const float local_u = slot_f - static_cast<float>(slot); // [0,1) within slot
+                    const float local_v = slot_f - static_cast<float>(slot); // [0,1) within slot
 
                     // Needle body occupies [0, needle_width_ratio/pitch] of the slot.
                     const float body_frac = np.needle_width_ratio / pitch;
                     const float center    = 0.5f;
                     const float half_body = body_frac * 0.5f;
 
-                    // Tapered tips: width narrows linearly to 0 at v=0 and v=1.
+                    // Tapered tips: width narrows linearly to 0 at u=0 and u=1.
                     float taper_scale = 1.0f;
-                    if (v < np.tip_taper) {
-                        taper_scale = v / np.tip_taper;
-                    } else if (v > 1.0f - np.tip_taper) {
-                        taper_scale = (1.0f - v) / np.tip_taper;
+                    if (u < np.tip_taper) {
+                        taper_scale = u / np.tip_taper;
+                    } else if (u > 1.0f - np.tip_taper) {
+                        taper_scale = (1.0f - u) / np.tip_taper;
                     }
                     const float tapered_half = half_body * taper_scale;
 
-                    if (local_u >= center - tapered_half && local_u <= center + tapered_half) {
+                    if (local_v >= center - tapered_half && local_v <= center + tapered_half) {
                         alpha[y * K_LEAF_CELL_PX + x] = 255;
                     }
                 }
@@ -349,8 +349,8 @@ namespace treegen {
                     const int ci = y * K_LEAF_CELL_PX + x;
                     if (!strip_alpha[ci]) continue;
 
-                    const float u = (static_cast<float>(x) - pad) / usable;
-                    const int slot = std::min(static_cast<int>(u / pitch), np.needle_count - 1);
+                    const float v = (static_cast<float>(y) - pad) / usable;
+                    const int slot = std::min(static_cast<int>(v / pitch), np.needle_count - 1);
 
                     const float lr = pine_base.r * jitter_r[slot];
                     const float lg = pine_base.g * jitter_g[slot];
@@ -382,15 +382,15 @@ namespace treegen {
                     const int ci = y * K_LEAF_CELL_PX + x;
                     if (!strip_alpha[ci]) continue;
 
-                    const float u = (static_cast<float>(x) - pad) / usable;
-                    const float slot_f = u / pitch;
+                    const float v = (static_cast<float>(y) - pad) / usable;
+                    const float slot_f = v / pitch;
                     const int slot = static_cast<int>(slot_f);
-                    const float local_u = slot_f - static_cast<float>(std::min(slot, np.needle_count - 1));
+                    const float local_v = slot_f - static_cast<float>(std::min(slot, np.needle_count - 1));
 
-                    // Map local_u within needle body to [-1,1] across cross-section.
+                    // Map local_v within needle body to [-1,1] across cross-section.
                     const float center = 0.5f;
                     const float half_body = body_frac * 0.5f;
-                    float t = (local_u - center) / half_body; // [-1, 1] if half_body > 0
+                    float t = (local_v - center) / half_body; // [-1, 1] if half_body > 0
                     if (t < -1.0f) t = -1.0f;
                     if (t > 1.0f)  t = 1.0f;
 

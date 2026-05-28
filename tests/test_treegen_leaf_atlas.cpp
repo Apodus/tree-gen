@@ -81,10 +81,10 @@ namespace {
     // Mirror of `k_leaf_color` in leaf_atlas.cpp (single source of truth there;
     // pinned here as the test's expected reference).
     constexpr LinearRgb k_expected[4] = {
-        /* OakLobed      */ { 0.30f, 0.55f, 0.18f },
+        /* OakLobed      */ { 0.20f, 0.38f, 0.12f },
         /* PineNeedle    */ { 0.10f, 0.30f, 0.12f },
-        /* BirchSerrated */ { 0.55f, 0.70f, 0.30f },
-        /* MapleStar     */ { 0.45f, 0.55f, 0.20f },
+        /* BirchSerrated */ { 0.35f, 0.50f, 0.18f },
+        /* MapleStar     */ { 0.30f, 0.38f, 0.14f },
     };
 
 }  // namespace
@@ -723,4 +723,48 @@ TEST_CASE("[treegen_leaf_atlas_p3] roughness increases with vein height",
     REQUIRE(count_hi_v > 0);
     // High-vein regions should be rougher.
     REQUIRE(rough_at_high_vein / count_hi_v > rough_at_low_vein / count_lo_v);
+}
+
+
+// ============================================================================
+// Needle-strip orientation test (18).
+// ============================================================================
+
+// ---- Test 18: needle-strip orientation — needles slotted along V ------------
+// Needles extend across U (strip width) and are slotted along V (branch axis).
+// A horizontal scan (fixed Y, sweep X) crosses one needle body → few transitions.
+// A vertical scan (fixed X, sweep Y) crosses 8 needle slots → many transitions.
+TEST_CASE("[treegen_leaf_atlas_p3] needle strip orientation: needles along V",
+          "[treegen][treegen_leaf_atlas_p3][needle_strip]") {
+    auto png = tg::encode_leaf_atlas_png(18u);
+    auto d = decode_atlas(png);
+
+    const int x0 = tg::K_NEEDLE_STRIP_CELL_COL * tg::K_LEAF_CELL_PX;
+    const int y0 = tg::K_NEEDLE_STRIP_CELL_ROW * tg::K_LEAF_CELL_PX;
+    const int cx = x0 + tg::K_LEAF_CELL_PX / 2;
+    const int cy = y0 + tg::K_LEAF_CELL_PX / 2;
+
+    // Count alpha 0→255 and 255→0 transitions along a scanline.
+    auto count_transitions = [&](int fixed_x, int fixed_y, bool sweep_x) -> int {
+        int transitions = 0;
+        bool prev_opaque = false;
+        const int len = tg::K_LEAF_CELL_PX;
+        for (int i = 0; i < len; ++i) {
+            const int px = sweep_x ? (x0 + i) : fixed_x;
+            const int py = sweep_x ? fixed_y  : (y0 + i);
+            const bool opaque = d.bytes[(py * d.w + px) * 4 + 3] > 0;
+            if (i > 0 && opaque != prev_opaque) ++transitions;
+            prev_opaque = opaque;
+        }
+        return transitions;
+    };
+
+    // Horizontal scan at cell center Y: one needle extends full U → few transitions.
+    const int h_trans = count_transitions(0, cy, true);
+    // Vertical scan at cell center X: crosses 8 needle slots → many transitions.
+    const int v_trans = count_transitions(cx, 0, false);
+
+    INFO("horizontal transitions=" << h_trans << " vertical transitions=" << v_trans);
+    REQUIRE(h_trans <= 4);
+    REQUIRE(v_trans >= 12);
 }

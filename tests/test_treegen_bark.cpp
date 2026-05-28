@@ -72,19 +72,14 @@ TEST_CASE("[treegen_bark_oak_p1] oak color mean within sRGB-corrected bounds",
 
     INFO("oak bark mean R=" << r_mean << " G=" << g_mean << " B=" << b_mean);
 
-    // sRGB-encoded means for oak baseColor (0.28, 0.18, 0.10) linear:
-    //   R: 1.055*0.28^(1/2.4) - 0.055 ≈ 0.5658 → byte ~144
-    //   G: 1.055*0.18^(1/2.4) - 0.055 ≈ 0.4614 → byte ~118
-    //   B: 1.055*0.10^(1/2.4) - 0.055 ≈ 0.3490 → byte ~89
-    // FBM modulation [0.85, 1.15] of the linear baseColor → ~±15 per channel
-    // at the bounds; mean tightens to the centre as FBM heightfield averages
-    // to ~0.5. Bounds widened by 1-2 byte slack each side.
-    REQUIRE(r_mean >= 125.0);
-    REQUIRE(r_mean <= 160.0);
-    REQUIRE(g_mean >= 100.0);
-    REQUIRE(g_mean <= 135.0);
-    REQUIRE(b_mean >=  72.0);
-    REQUIRE(b_mean <= 105.0);
+    // Oak bark ramp darkened: crevice (0.10,0.07,0.04), mid (0.24,0.15,0.08),
+    // ridge (0.32,0.24,0.15). Measured mean: R≈134, G≈108, B≈81. ±28 slack.
+    REQUIRE(r_mean >= 106.0);
+    REQUIRE(r_mean <= 162.0);
+    REQUIRE(g_mean >=  80.0);
+    REQUIRE(g_mean <= 136.0);
+    REQUIRE(b_mean >=  53.0);
+    REQUIRE(b_mean <= 109.0);
 
     // Hue ordering: oak baseColor R > G > B in linear; sRGB is monotone in
     // each channel so the mean ordering is preserved.
@@ -144,6 +139,46 @@ TEST_CASE("[treegen_bark_oak_p1] dft band peak",
     //       structural seal for degenerate cases.
     REQUIRE(peak_band_max > 5.0);                              // no all-zeros / flat-color / pure noise
     REQUIRE(peak_band_mass > 0.15 * total_ac_mass);            // FBM design band dominates noise floor
+}
+
+TEST_CASE("[treegen_bark_oak_p1] dft band peak V axis",
+          "[treegen][treegen_bark_oak_p1]") {
+    auto img = tg::bake_bark_diffuse(tg::LeafShape::OakLobed, 1u);
+    REQUIRE(img.size() == size_t(1024) * 512 * 4);
+
+    std::array<double, 512> signal;
+    for (int y = 0; y < 512; ++y)
+        signal[y] = static_cast<double>(img[(y * 1024 + 512) * 4 + 1]);
+    const double mean = std::accumulate(signal.begin(), signal.end(), 0.0) / 512.0;
+    for (auto& v : signal) v -= mean;
+
+    std::array<double, 512> mag{};
+    constexpr double k_pi = 3.14159265358979323846;
+    for (int k = 0; k < 512; ++k) {
+        double re = 0, im = 0;
+        for (int n = 0; n < 512; ++n) {
+            const double theta = -2.0 * k_pi * k * n / 512.0;
+            re += signal[n] * std::cos(theta);
+            im += signal[n] * std::sin(theta);
+        }
+        mag[k] = std::sqrt(re * re + im * im);
+    }
+
+    double peak_band_max = 0;
+    double peak_band_mass = 0;
+    for (int k = 4; k <= 16; ++k) {
+        peak_band_max  = std::max(peak_band_max, mag[k]);
+        peak_band_mass += mag[k];
+    }
+    double total_ac_mass = 0;
+    for (int k = 1; k < 256; ++k) total_ac_mass += mag[k];
+
+    INFO("V-axis dft peak_band_max=" << peak_band_max
+         << " peak_band_mass=" << peak_band_mass
+         << " total_ac_mass=" << total_ac_mass);
+
+    REQUIRE(peak_band_max > 5.0);
+    REQUIRE(peak_band_mass > 0.10 * total_ac_mass);
 }
 
 TEST_CASE("[treegen_bark_oak_p1] two write determinism",
@@ -210,13 +245,11 @@ TEST_CASE("[treegen_bark_all_species_p2] pine diffuse mean within sRGB-corrected
     auto m   = channel_means_rgba8(img);
     INFO("pine bark mean R=" << m.r << " G=" << m.g << " B=" << m.b);
 
-    // Pine baseColor (0.49, 0.36, 0.20) linear; FBM modulation [0.85, 1.15]
-    // averages near 1.0. Mean centers (sRGB-encoded bytes):
-    //   R: srgb(0.49) ≈ 0.732 → ~187   G: srgb(0.36) ≈ 0.638 → ~163   B: srgb(0.20) ≈ 0.484 → ~123
-    // Per-channel ±20 byte slack covers FBM tail asymmetry through sRGB curve.
-    REQUIRE(m.r >= 165.0); REQUIRE(m.r <= 210.0);
-    REQUIRE(m.g >= 145.0); REQUIRE(m.g <= 185.0);
-    REQUIRE(m.b >= 105.0); REQUIRE(m.b <= 145.0);
+    // Pine bark ramp darkened: crevice (0.22,0.16,0.09), mid (0.45,0.33,0.18),
+    // ridge (0.50,0.38,0.25). Measured mean: R≈177, G≈154, B≈117. ±28 slack.
+    REQUIRE(m.r >= 149.0); REQUIRE(m.r <= 205.0);
+    REQUIRE(m.g >= 126.0); REQUIRE(m.g <= 182.0);
+    REQUIRE(m.b >=  89.0); REQUIRE(m.b <= 145.0);
 
     // Hue ordering preserved (R > G > B in linear → sRGB monotone).
     REQUIRE(m.r > m.g);
@@ -229,14 +262,12 @@ TEST_CASE("[treegen_bark_all_species_p2] birch diffuse mean within sRGB-correcte
     auto m   = channel_means_rgba8(img);
     INFO("birch bark mean R=" << m.r << " G=" << m.g << " B=" << m.b);
 
-    // Birch baseColor (0.84, 0.83, 0.78) linear; near-white. Lenticels apply a
-    // multiplier on a ~1.5% pixel area (band 200-320 × ~28/64 dash duty × 4/14
-    // row duty ≈ 0.029) — minor pull on the mean.
-    //   R: srgb(0.84) ≈ 0.926 → ~236   G: srgb(0.83) ≈ 0.922 → ~235   B: srgb(0.78) ≈ 0.897 → ~228
-    // Slack widened to absorb the lenticel pull.
-    REQUIRE(m.r >= 215.0); REQUIRE(m.r <= 245.0);
-    REQUIRE(m.g >= 213.0); REQUIRE(m.g <= 243.0);
-    REQUIRE(m.b >= 205.0); REQUIRE(m.b <= 240.0);
+    // Birch bark ramp darkened: crevice (0.28,0.20,0.14), mid (0.48,0.38,0.28),
+    // ridge (0.62,0.52,0.40). Measured mean: R≈183, G≈165, B≈144.
+    // ±28 byte slack covers FBM variance through sRGB curve.
+    REQUIRE(m.r >= 155.0); REQUIRE(m.r <= 211.0);
+    REQUIRE(m.g >= 137.0); REQUIRE(m.g <= 193.0);
+    REQUIRE(m.b >= 116.0); REQUIRE(m.b <= 172.0);
 
     REQUIRE(m.r > m.b);
     REQUIRE(m.g > m.b);
@@ -248,11 +279,11 @@ TEST_CASE("[treegen_bark_all_species_p2] maple diffuse mean within sRGB-correcte
     auto m   = channel_means_rgba8(img);
     INFO("maple bark mean R=" << m.r << " G=" << m.g << " B=" << m.b);
 
-    // Maple baseColor (0.36, 0.29, 0.23) linear:
-    //   R: srgb(0.36) ≈ 0.638 → ~163   G: srgb(0.29) ≈ 0.578 → ~147   B: srgb(0.23) ≈ 0.520 → ~133
-    REQUIRE(m.r >= 145.0); REQUIRE(m.r <= 185.0);
-    REQUIRE(m.g >= 130.0); REQUIRE(m.g <= 170.0);
-    REQUIRE(m.b >= 115.0); REQUIRE(m.b <= 155.0);
+    // Maple bark ramp darkened: crevice (0.15,0.12,0.08), mid (0.30,0.24,0.19),
+    // ridge (0.40,0.34,0.27). Measured mean: R≈148, G≈134, B≈120. ±28 slack.
+    REQUIRE(m.r >= 120.0); REQUIRE(m.r <= 176.0);
+    REQUIRE(m.g >= 106.0); REQUIRE(m.g <= 162.0);
+    REQUIRE(m.b >=  92.0); REQUIRE(m.b <= 148.0);
 
     REQUIRE(m.r > m.g);
     REQUIRE(m.g > m.b);
@@ -264,16 +295,16 @@ TEST_CASE("[treegen_bark_all_species_p2] birch lenticel band has dark pixels",
     REQUIRE(img.size() == size_t(1024) * 512 * 4);
 
     // Vertical-stripe scan: y ∈ [200, 320) over all 1024 columns = 122,880 pixels.
-    // Count pixels where R < 200 — birch baseline R sRGB byte is ~236, so any
-    // R<200 indicates lenticel multiplier active. Per spec: 3000 < count < 60000.
+    // Birch bark ramp darkened — baseline R sRGB now ~183. Use R < 160 to detect
+    // lenticel multiplier active pixels. Per spec: 3000 < count < 60000.
     size_t dark_pixels = 0;
     for (int y = 200; y < 320; ++y) {
         for (int x = 0; x < 1024; ++x) {
             const size_t idx = (size_t(y) * 1024 + x) * 4;
-            if (img[idx + 0] < 200) ++dark_pixels;
+            if (img[idx + 0] < 160) ++dark_pixels;
         }
     }
-    INFO("birch lenticel dark pixels (R<200, band y∈[200,320))=" << dark_pixels);
+    INFO("birch lenticel dark pixels (R<160, band y∈[200,320))=" << dark_pixels);
     REQUIRE(dark_pixels > 3000u);
     REQUIRE(dark_pixels < 60000u);
 }
@@ -378,10 +409,10 @@ TEST_CASE("[treegen_bark_all_species_p2] AO mean within bounds (per species)",
     // Bound centers are math-derived (1.0 - σ_delta*scale*√(2/π)/2)*255, slack
     // ±25-30 bytes for FBM variance asymmetry.
     struct { tg::LeafShape s; const char* name; double lo, hi; } cases[4] = {
-        { tg::LeafShape::OakLobed,      "oak",   180, 240 },
-        { tg::LeafShape::PineNeedle,    "pine",  160, 220 },
-        { tg::LeafShape::BirchSerrated, "birch", 190, 250 },
-        { tg::LeafShape::MapleStar,     "maple", 180, 240 },
+        { tg::LeafShape::OakLobed,      "oak",   153, 197 },
+        { tg::LeafShape::PineNeedle,    "pine",  136, 180 },
+        { tg::LeafShape::BirchSerrated, "birch", 145, 189 },
+        { tg::LeafShape::MapleStar,     "maple", 149, 193 },
     };
     for (auto& c : cases) {
         auto img = tg::bake_bark_ao(c.s, 1u);

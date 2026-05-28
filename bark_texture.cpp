@@ -57,10 +57,10 @@ namespace treegen {
         // Replaces single baseColor * modulation. Linear RGB.
         constexpr BarkProfile k_bark_profiles[4] = {
             //                  lac   gain  norm  ao    rough lent  crevice              mid                  ridge
-            /* OakLobed      */ { 2.0f, 0.50f, 4.0f, 16.0f, 0.75f, false, {0.12f,0.08f,0.05f}, {0.28f,0.18f,0.10f}, {0.38f,0.28f,0.18f} },
-            /* PineNeedle    */ { 2.2f, 0.45f, 5.0f, 24.0f, 0.65f, false, {0.25f,0.18f,0.10f}, {0.49f,0.36f,0.20f}, {0.55f,0.42f,0.28f} },
-            /* BirchSerrated */ { 2.0f, 0.55f, 1.5f, 12.0f, 0.55f, true,  {0.60f,0.58f,0.52f}, {0.84f,0.83f,0.78f}, {0.92f,0.91f,0.88f} },
-            /* MapleStar     */ { 2.1f, 0.48f, 3.0f, 16.0f, 0.70f, false, {0.18f,0.14f,0.10f}, {0.36f,0.29f,0.23f}, {0.48f,0.40f,0.32f} },
+            /* OakLobed      */ { 2.0f, 0.50f, 4.0f, 28.0f, 0.75f, false, {0.10f,0.07f,0.04f}, {0.24f,0.15f,0.08f}, {0.32f,0.24f,0.15f} },
+            /* PineNeedle    */ { 2.2f, 0.45f, 5.0f, 32.0f, 0.65f, false, {0.22f,0.16f,0.09f}, {0.45f,0.33f,0.18f}, {0.50f,0.38f,0.25f} },
+            /* BirchSerrated */ { 2.0f, 0.55f, 1.5f, 26.0f, 0.55f, true,  {0.28f,0.20f,0.14f}, {0.48f,0.38f,0.28f}, {0.62f,0.52f,0.40f} },
+            /* MapleStar     */ { 2.1f, 0.48f, 3.0f, 28.0f, 0.70f, false, {0.15f,0.12f,0.08f}, {0.30f,0.24f,0.19f}, {0.40f,0.34f,0.27f} },
         };
         static_assert(int(LeafShape::OakLobed)      == 0, "k_bark_profiles index pinned to LeafShape enum order");
         static_assert(int(LeafShape::PineNeedle)    == 1, "k_bark_profiles index pinned to LeafShape enum order");
@@ -101,6 +101,15 @@ namespace treegen {
             float dsum_dy = 0.0f;
             float amp_total = 0.0f;
 
+            // V-axis domain warp: low-frequency simplex displaces V before FBM loop.
+            constexpr float k_warp_amp = 0.03f;
+            const uint64_t warp_seed = mix64(seed ^ 0xA41A104500B1ULL);
+            const auto warp = simplex_noise_2d(u * 3.0f, v * 3.0f, warp_seed);
+            const float v_warped = v + warp.value * k_warp_amp;
+
+            // X-derivative cross-term: warp depends on u, so fv now has dpx contribution.
+            const float dfv_warped_dpx_per_freq = warp.dx * 3.0f * k_warp_amp / static_cast<float>(k_w);
+
             for (int o = 0; o < k_octaves; ++o) {
                 // Cylindrical wrap in U: map U to a circle of radius freq/(2*pi)
                 // so that the noise tiles seamlessly. The radius is chosen so the
@@ -109,7 +118,7 @@ namespace treegen {
                 const float angle = u * k_pi2;
                 const float cx = r * std::cos(angle);
                 const float cy = r * std::sin(angle);
-                const float fv = v * freq;
+                const float fv = v_warped * freq;
 
                 // Use two simplex samples to map the 3D cylinder to 2D:
                 // sample A at (cx, fv) and sample B at (cy, fv) with offset seed.
@@ -135,11 +144,13 @@ namespace treegen {
                 float dcx_dpx = -r * std::sin(angle) * k_pi2 * du_dpx;
                 float dcy_dpx =  r * std::cos(angle) * k_pi2 * du_dpx;
                 float dfv_dpy = freq * dv_dpy;
+                const float dfv_warped_dpx = freq * dfv_warped_dpx_per_freq;
 
                 // sa depends on (cx, fv); sb depends on (cy, fv).
                 // d(noise)/dpx = 0.5*(sa.dx * dcx_dpx + sb.dx * dcy_dpx)
                 // d(noise)/dpy = 0.5*(sa.dy * dfv_dpy + sb.dy * dfv_dpy)
-                float dn_dpx = 0.5f * (sa.dx * dcx_dpx + sb.dx * dcy_dpx);
+                float dn_dpx = 0.5f * (sa.dx * dcx_dpx + sa.dy * dfv_warped_dpx
+                              + sb.dx * dcy_dpx + sb.dy * dfv_warped_dpx);
                 float dn_dpy = 0.5f * (sa.dy * dfv_dpy + sb.dy * dfv_dpy);
 
                 sum      += amp * noise_val;

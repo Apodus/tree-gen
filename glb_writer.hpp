@@ -74,6 +74,9 @@ struct MeshData {
     int   lod_index          = -1;      // -1 = no _RYNX_LOD extension emitted
     float lod_max_distance_m = 0.0f;    // ignored unless lod_index >= 0
     float lod_screen_height_px = 0.0f;  // screen-height pixel threshold for LOD selection
+    // _RYNX_COLLISION capsule (mesh[0] only). negative half_length = not set.
+    float collision_half_length = -1.0f;
+    float collision_radius      = 0.0f;
 };
 
 namespace glb_detail {
@@ -154,6 +157,8 @@ struct MeshJsonMeta {
     int  lod_index;            // -1 = no _RYNX_LOD emitted
     float lod_max_distance_m;
     float lod_screen_height_px = 0.0f;
+    float collision_half_length = -1.0f;  // negative = not set
+    float collision_radius      = 0.0f;
 };
 
 // C6 P4 — forward-only material JSON emitter. Replaces the pop_back() hack
@@ -348,7 +353,8 @@ inline std::string build_json_multi_mesh(
     bool any_lod,
     int image_count = 0,
     const std::vector<int>* image_bv_indices = nullptr,
-    bool any_translucency = false)
+    bool any_translucency = false,
+    bool any_collision = false)
 {
     std::string j;
     j.reserve(4096 + meshes_meta.size() * 256);
@@ -411,7 +417,7 @@ inline std::string build_json_multi_mesh(
 
     // extensionsUsed — emit when any extension is in use.
     const bool has_textures = (image_count > 0);
-    if (any_wind || any_lod || any_translucency) {
+    if (any_wind || any_lod || any_translucency || any_collision) {
         j += R"(,"extensionsUsed":[)";
         bool first = true;
         auto ext = [&](const char* name) {
@@ -419,6 +425,7 @@ inline std::string build_json_multi_mesh(
             first = false;
             j += '"'; j += name; j += '"';
         };
+        if (any_collision)    ext("_RYNX_COLLISION");
         if (any_translucency) ext("_RYNX_LEAF_TRANSLUCENCY");
         if (any_lod)          ext("_RYNX_LOD");
         if (any_wind)         ext("_RYNX_WIND");
@@ -514,15 +521,31 @@ inline std::string build_json_multi_mesh(
             j += '}';
         }
         j += ']';
-        // Per-mesh `_RYNX_LOD` extension.
-        if (mm.lod_index >= 0) {
-            j += R"(,"extensions":{"_RYNX_LOD":{"lod_index":)";
-            j += i2s(mm.lod_index);
-            j += R"(,"lod_max_distance_m":)";
-            j += f2s(mm.lod_max_distance_m);
-            j += R"(,"lod_screen_height_px":)";
-            j += f2s(mm.lod_screen_height_px);
-            j += R"(}})";
+        // Per-mesh extensions (_RYNX_COLLISION, _RYNX_LOD).
+        const bool has_lod = (mm.lod_index >= 0);
+        const bool has_col = (mm.collision_half_length >= 0.0f);
+        if (has_col || has_lod) {
+            j += R"(,"extensions":{)";
+            bool first_ext = true;
+            if (has_col) {
+                j += R"("_RYNX_COLLISION":{"type":"capsule","half_length":)";
+                j += f2s(mm.collision_half_length);
+                j += R"(,"radius":)";
+                j += f2s(mm.collision_radius);
+                j += '}';
+                first_ext = false;
+            }
+            if (has_lod) {
+                if (!first_ext) j += ',';
+                j += R"("_RYNX_LOD":{"lod_index":)";
+                j += i2s(mm.lod_index);
+                j += R"(,"lod_max_distance_m":)";
+                j += f2s(mm.lod_max_distance_m);
+                j += R"(,"lod_screen_height_px":)";
+                j += f2s(mm.lod_screen_height_px);
+                j += '}';
+            }
+            j += '}';
         }
         j += '}';
     }
@@ -881,16 +904,20 @@ inline bool write_glb_multi_mesh(std::span<const MeshData> meshes,
     std::vector<glb_detail::MeshJsonMeta> meshes_meta;
     meshes_meta.reserve(meshes.size());
 
-    bool any_wind = false;
-    bool any_lod  = false;
+    bool any_wind      = false;
+    bool any_lod       = false;
+    bool any_collision = false;
     for (const auto& mm : meshes) {
         glb_detail::MeshJsonMeta meta;
         meta.first_prim = static_cast<int>(resolved.size());
         meta.prim_count = static_cast<int>(mm.primitives.size());
         meta.lod_index  = mm.lod_index;
-        meta.lod_max_distance_m   = mm.lod_max_distance_m;
-        meta.lod_screen_height_px = mm.lod_screen_height_px;
+        meta.lod_max_distance_m     = mm.lod_max_distance_m;
+        meta.lod_screen_height_px   = mm.lod_screen_height_px;
+        meta.collision_half_length   = mm.collision_half_length;
+        meta.collision_radius        = mm.collision_radius;
         if (mm.lod_index >= 0) any_lod = true;
+        if (mm.collision_half_length >= 0.0f) any_collision = true;
         meshes_meta.push_back(meta);
 
         for (const auto& p : mm.primitives) {
@@ -1082,7 +1109,8 @@ inline bool write_glb_multi_mesh(std::span<const MeshData> meshes,
         total_buffer_bytes, any_wind, any_lod,
         static_cast<int>(images.size()),
         images.empty() ? nullptr : &image_bv_indices,
-        any_translucency);
+        any_translucency,
+        any_collision);
 
     size_t json_pad = glb_detail::align_up(json.size()) - json.size();
     json.append(json_pad, ' ');

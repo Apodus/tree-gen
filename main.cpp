@@ -3,6 +3,7 @@
 
 #include "bark_texture.hpp"
 #include "branch_mesh.hpp"
+#include "collision_fit.hpp"
 #include "det_rng.hpp"
 #include "envelopes.hpp"
 #include "face_budget.hpp"
@@ -260,6 +261,7 @@ int main(int argc, char** argv) {
         else if (s.kind == "tree") {
             // C3 P2 — grow the skeleton; print summary stats; optional JSON dump.
             treegen::TreeSkeleton skel = treegen::grow_skeleton(s.tree, seed_effective);
+            const treegen::TrunkCapsule capsule = treegen::compute_trunk_capsule(skel, s.tree);
 
             // C5 P1 — leaf-site generation (BranchWalk).
             {
@@ -287,6 +289,9 @@ int main(int argc, char** argv) {
                 skel.attractors_consumed,
                 skel.iterations_run,
                 skel.leaf_sites.size());
+            std::printf("treegen: capsule half_length=%g radius=%g\n",
+                        static_cast<double>(capsule.half_length),
+                        static_cast<double>(capsule.radius));
 
             if (!skeleton_json_path.empty()) {
                 const std::string dump = treegen::dump_skeleton_json(skel);
@@ -511,6 +516,10 @@ int main(int argc, char** argv) {
                     md.lod_index             = lod.lod_index;
                     md.lod_max_distance_m    = lod.lod_max_distance_m;
                     md.lod_screen_height_px  = lod.lod_screen_height_px;
+                    if (li == 0) {
+                        md.collision_half_length = capsule.half_length;
+                        md.collision_radius      = capsule.radius;
+                    }
                     meshes.push_back(md);
                 }
 

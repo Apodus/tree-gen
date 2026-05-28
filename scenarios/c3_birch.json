@@ -38,7 +38,7 @@
   "leaves": {
     "geometry_type": "bent_cross_cluster",
     "shape": "birch_serrated",
-    "leaf_size_m": 0.08,
+    "leaf_size_m": 0.24,
     "cluster_count_per_tip": 2,
     "leaf_min_branch_depth": 3,
     "leaf_density_per_meter": 10.0,

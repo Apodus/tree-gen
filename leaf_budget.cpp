@@ -30,51 +30,6 @@ int budget_for_lod(const LeafBudget& b, int lod_index) {
     }
 }
 
-// One-pass downgrade ladder. Drives `geom` down until per-leaf tri count
-// times `raw_K` fits within `budget_tris`, or geom hits SingleCard.
-//
-// Order: ProceduralVeined → BentCrossCluster(cluster) → BentCrossCluster(1)
-//        → BentCard → SingleCard.
-struct LadderResult {
-    LeafGeometryType emitted_type;
-    int              effective_cluster;
-    int              tris_per_leaf;
-};
-LadderResult downgrade_until_fits(LeafGeometryType starting_type,
-                                  LeafShape        shape,
-                                  int              starting_cluster,
-                                  int              raw_K,
-                                  int              budget_tris) {
-    LeafGeometryType g = starting_type;
-    int cluster        = starting_cluster > 0 ? starting_cluster : 1;
-
-    auto tpl = [&]() {
-        return tris_per_leaf(g, shape, cluster);
-    };
-
-    // BranchStrip has its own segment-based budget path — never enters the
-    // site-based downgrade ladder. Passthrough.
-    while (g != LeafGeometryType::SingleCard
-           && g != LeafGeometryType::BranchStrip
-           && static_cast<int64_t>(tpl()) * raw_K > budget_tris) {
-        if (g == LeafGeometryType::ProceduralVeined) {
-            g = LeafGeometryType::BentCrossCluster;
-        } else if (g == LeafGeometryType::BentCrossCluster && cluster > 1) {
-            cluster = 1;
-        } else if (g == LeafGeometryType::BentCrossCluster) {
-            g = LeafGeometryType::BentCard;
-        } else if (g == LeafGeometryType::BentCard) {
-            g = LeafGeometryType::SingleCard;
-        }
-    }
-
-    LadderResult r;
-    r.emitted_type      = g;
-    r.effective_cluster = cluster;
-    r.tris_per_leaf     = tpl();
-    return r;
-}
-
 // Stable hash-based sort: produce a deterministic permutation of indices
 // [0..N) ordered by PCG32 hash (rank_key) per site index. Tiebreak by index
 // (PCG32 collisions are 2^-32 rare but the seal is free).
@@ -124,28 +79,26 @@ std::array<LeafBudgetResult, 4> allocate_leaves_all_lods(
 
     int prev_K = N;  // chain-min cap from previous LOD; L0 starts unbounded.
 
+    // C3-LOD-quality: geometry type is frozen across all LODs (no downgrade
+    // ladder). Budget compliance comes purely from count reduction via cap_L.
+    const int frozen_cluster = cluster_count_per_tip > 0 ? cluster_count_per_tip : 1;
+    const int frozen_tpl     = tris_per_leaf(starting_type, shape, frozen_cluster);
+    const int tpl_safe       = frozen_tpl > 0 ? frozen_tpl : K_TRIS_PER_LEAF_SINGLE_CARD;
+
     for (int L = 0; L < 4; ++L) {
         const int budget_L = budget_for_lod(budget, L);
         const int raw_K_L  = static_cast<int>(k_lod_subsample_fraction[L] * static_cast<float>(N));
 
-        // Per-LOD geometry-type ladder (downgrade until raw_K_L fits the budget
-        // or we hit SingleCard).
-        const LadderResult lr = downgrade_until_fits(
-            starting_type, shape, cluster_count_per_tip, raw_K_L, budget_L);
-
-        // Even after the ladder, raw_K_L * tris_per_leaf may still exceed the
-        // budget (SingleCard is the floor). Compute cap_L and pin K_L.
-        const int tpl  = lr.tris_per_leaf > 0 ? lr.tris_per_leaf : K_TRIS_PER_LEAF_SINGLE_CARD;
-        const int cap_L = budget_L / tpl;  // integer division — pessimistic, never over-budget
+        const int cap_L = budget_L / tpl_safe;  // integer division — pessimistic, never over-budget
         int K_L = std::min({ prev_K, raw_K_L, cap_L });
         if (K_L < 0) K_L = 0;
 
         LeafBudgetResult& r = out[static_cast<size_t>(L)];
         r.kept_indices.assign(sorted_indices.begin(),
                               sorted_indices.begin() + K_L);
-        r.emitted_type      = lr.emitted_type;
-        r.effective_cluster = lr.effective_cluster;
-        r.estimated_tris    = K_L * tpl;
+        r.emitted_type      = starting_type;
+        r.effective_cluster = frozen_cluster;
+        r.estimated_tris    = K_L * tpl_safe;
 
         // Fail early (CLAUDE.md) — chain-min + budget invariants are structural,
         // not runtime-best-effort.

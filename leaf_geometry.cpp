@@ -6,6 +6,8 @@
 #include "leaf_atlas.hpp"       // tile_uv — single source of truth atlas UV mapping
 #include "leaf_shapes.hpp"
 
+#include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <cstdint>
 
@@ -492,11 +494,11 @@ LeafMeshOutput build_branch_strip_mesh(const TreeSkeleton&      skel,
         vec3 perp_u = normalized(cross(seg_dir, ref));
         vec3 perp_v = normalized(cross(seg_dir, perp_u));
 
-        // Multi-strip: count from branch radius.
+        // Multi-strip: start from minimum, increase with branch radius.
         const float avg_radius = (parent.radius + child.radius) * 0.5f;
-        int strip_count = 1;
-        if (avg_radius >= strip_radius_threshold * 2.0f) strip_count = 2;
-        if (avg_radius >= strip_radius_threshold * 3.0f) strip_count = 3;
+        int strip_count = opts.min_strips_per_segment;
+        if (avg_radius >= strip_radius_threshold * 2.0f) strip_count = std::max(strip_count, 2);
+        if (avg_radius >= strip_radius_threshold * 3.0f) strip_count = std::max(strip_count, 3);
         strip_count = std::min(strip_count, opts.max_strips_per_segment);
 
         const float depth_frac = static_cast<float>(child.depth) * inv_max_depth;
@@ -509,12 +511,11 @@ LeafMeshOutput build_branch_strip_mesh(const TreeSkeleton&      skel,
         const uint8_t twig_b   = quantize_wind(4.0f * d * d * od);
         const uint8_t leaf_b   = quantize_wind(d * d * d);
 
-        // Angular offsets: 1→[0], 2→[0,pi], 3→[0,2pi/3,4pi/3].
+        // Angular offsets: pi/N spacing (bilateral strips cover both sides).
         constexpr float k_pi = 3.14159265358979323846f;
         for (int s = 0; s < strip_count; ++s) {
-            float angle = opts.strip_angular_offset;
-            if (strip_count == 2) angle += k_pi * static_cast<float>(s);
-            else if (strip_count == 3) angle += (2.0f * k_pi / 3.0f) * static_cast<float>(s);
+            float angle = opts.strip_angular_offset
+                        + (k_pi / static_cast<float>(strip_count)) * static_cast<float>(s);
 
             // Perpendicular direction at this angular offset.
             const float ca = std::cos(angle);
@@ -561,7 +562,8 @@ LeafMeshOutput build_branch_strip_mesh(const TreeSkeleton&      skel,
             push_uv(out.uvs, uv3.x, uv3.y);
 
             // Per-vertex normals, tangents, wind, material.
-            const vec3 tangent_dir = normalized(v1 - v0); // strip-right direction
+            const vec3 tangent_dir = seg_dir; // along-branch (dP/dV); atlas normal bake matches this convention
+            assert(std::abs(dot(tangent_dir, strip_normal)) < 1e-4f);
             for (int vi = 0; vi < 4; ++vi) {
                 push_xyz(out.normals, strip_normal);
                 out.tangents.push_back(tangent_dir.x);

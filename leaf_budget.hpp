@@ -20,8 +20,8 @@ namespace treegen {
 
 struct LeafBudget {
     int l0_tris = 4000;
-    int l1_tris = 1200;
-    int l2_tris = 400;
+    int l1_tris = 2400;
+    int l2_tris = 1200;
     int l3_tris = 0;
 };
 

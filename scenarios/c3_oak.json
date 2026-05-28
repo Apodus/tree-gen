@@ -38,7 +38,7 @@
   "leaves": {
     "geometry_type": "bent_cross_cluster",
     "shape": "oak_lobed",
-    "leaf_size_m": 0.12,
+    "leaf_size_m": 0.24,
     "cluster_count_per_tip": 2,
     "leaf_min_branch_depth": 3,
     "leaf_density_per_meter": 8.0,

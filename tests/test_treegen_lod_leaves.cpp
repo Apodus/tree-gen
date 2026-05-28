@@ -23,6 +23,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -283,119 +284,175 @@ TEST_CASE("[treegen_lod_leaves] downgrade-cap monotonicity (F1 regression seal)"
     REQUIRE(is_prefix_of(alloc[3].kept_indices, alloc[2].kept_indices));
 }
 
-TEST_CASE("[treegen_lod_leaves] ladder downgrades when ProceduralVeined overshoots",
+TEST_CASE("[treegen_lod_leaves] frozen geometry type across all LODs (C3-LOD-quality)",
           "[treegen][treegen_lod_leaves]") {
-    // MapleStar = 20 tris/leaf (ProceduralVeined). At L2, raw_K_L2 = 30.
-    // Procedural cost = 30*20 = 600 tris. Set l2_tris = 100 so procedural
-    // overshoots but SingleCard (2 tris/leaf, 30*2 = 60) fits.
+    // C3-LOD-quality: geometry type is frozen — no downgrade ladder. Budget
+    // compliance comes purely from count reduction. Verify all LODs emit the
+    // same type regardless of budget pressure.
     std::vector<ts::LeafSite> sites(300);
 
-    ts::LeafBudget budget;
-    budget.l0_tris = 100000;  // L0 fits ProceduralVeined easily
-    budget.l1_tris = 100000;
-    budget.l2_tris = 100;     // forces L2 to downgrade
-    budget.l3_tris = 0;
+    // ProceduralVeined (MapleStar = 20 tris/leaf). Tight L2 budget forces
+    // count reduction, NOT type change.
+    {
+        ts::LeafBudget budget;
+        budget.l0_tris = 100000;
+        budget.l1_tris = 100000;
+        budget.l2_tris = 100;  // cap_L2 = 100/20 = 5 leaves
+        budget.l3_tris = 0;
 
-    const auto alloc = ts::allocate_leaves_all_lods(
-        sites,
-        ts::LeafGeometryType::ProceduralVeined,
-        ts::LeafShape::MapleStar,
-        /*cluster_count_per_tip*/ 1,
-        budget,
-        /*seed_effective*/ 0xC5'03'00'00'00'00'00'02ULL);
+        const auto alloc = ts::allocate_leaves_all_lods(
+            sites,
+            ts::LeafGeometryType::ProceduralVeined,
+            ts::LeafShape::MapleStar,
+            /*cluster_count_per_tip*/ 1,
+            budget,
+            /*seed_effective*/ 0xC5'03'00'00'00'00'00'02ULL);
 
-    INFO("L0 emitted_type=" << int(alloc[0].emitted_type)
-        << " L1 emitted_type=" << int(alloc[1].emitted_type)
-        << " L2 emitted_type=" << int(alloc[2].emitted_type)
-        << " L0 est=" << alloc[0].estimated_tris
-        << " L1 est=" << alloc[1].estimated_tris
-        << " L2 est=" << alloc[2].estimated_tris);
+        INFO("ProceduralVeined: L0=" << int(alloc[0].emitted_type)
+            << " L1=" << int(alloc[1].emitted_type)
+            << " L2=" << int(alloc[2].emitted_type)
+            << " kept L0/L1/L2=" << alloc[0].kept_indices.size()
+            << "/" << alloc[1].kept_indices.size()
+            << "/" << alloc[2].kept_indices.size());
 
-    // L0 + L1 should still be Procedural (budget fits).
-    REQUIRE(alloc[0].emitted_type == ts::LeafGeometryType::ProceduralVeined);
-    REQUIRE(alloc[1].emitted_type == ts::LeafGeometryType::ProceduralVeined);
-    // L2 downgraded — not Procedural.
-    REQUIRE(alloc[2].emitted_type != ts::LeafGeometryType::ProceduralVeined);
+        // Frozen type: all LODs stay ProceduralVeined.
+        REQUIRE(alloc[0].emitted_type == ts::LeafGeometryType::ProceduralVeined);
+        REQUIRE(alloc[1].emitted_type == ts::LeafGeometryType::ProceduralVeined);
+        REQUIRE(alloc[2].emitted_type == ts::LeafGeometryType::ProceduralVeined);
 
-    // Monotonicity preserved (kept counts + tri counts both descend).
-    REQUIRE(alloc[0].kept_indices.size() >= alloc[1].kept_indices.size());
-    REQUIRE(alloc[1].kept_indices.size() >= alloc[2].kept_indices.size());
-    REQUIRE(alloc[2].kept_indices.size() >= alloc[3].kept_indices.size());
+        // Budget compliance via count reduction.
+        REQUIRE(alloc[2].estimated_tris <= budget.l2_tris);
+        REQUIRE(alloc[2].kept_indices.size() <= 5u);  // cap_L2 = 100/20 = 5
 
-    // Budget compliance.
-    REQUIRE(alloc[0].estimated_tris <= budget.l0_tris);
-    REQUIRE(alloc[1].estimated_tris <= budget.l1_tris);
-    REQUIRE(alloc[2].estimated_tris <= budget.l2_tris);
+        // Monotonicity preserved.
+        REQUIRE(alloc[0].kept_indices.size() >= alloc[1].kept_indices.size());
+        REQUIRE(alloc[1].kept_indices.size() >= alloc[2].kept_indices.size());
+    }
+
+    // BentCrossCluster(N=2) = 8 tris/leaf. Tight L2 budget.
+    {
+        ts::LeafBudget budget;
+        budget.l0_tris = 100000;
+        budget.l1_tris = 100000;
+        budget.l2_tris = 100;
+        budget.l3_tris = 0;
+
+        const auto alloc = ts::allocate_leaves_all_lods(
+            sites,
+            ts::LeafGeometryType::BentCrossCluster,
+            ts::LeafShape::OakLobed,
+            /*cluster_count_per_tip*/ 2,
+            budget,
+            /*seed_effective*/ 0xC2'03'00'00'00'00'00'01ULL);
+
+        // All LODs stay BentCrossCluster.
+        REQUIRE(alloc[0].emitted_type == ts::LeafGeometryType::BentCrossCluster);
+        REQUIRE(alloc[1].emitted_type == ts::LeafGeometryType::BentCrossCluster);
+        REQUIRE(alloc[2].emitted_type == ts::LeafGeometryType::BentCrossCluster);
+        // Cluster count preserved.
+        REQUIRE(alloc[0].effective_cluster == 2);
+        REQUIRE(alloc[1].effective_cluster == 2);
+        REQUIRE(alloc[2].effective_cluster == 2);
+        // Budget compliance: cap_L2 = 100/8 = 12 leaves.
+        REQUIRE(alloc[2].estimated_tris <= budget.l2_tris);
+        REQUIRE(alloc[2].kept_indices.size() <= 12u);
+
+        REQUIRE(alloc[0].kept_indices.size() >= alloc[1].kept_indices.size());
+        REQUIRE(alloc[1].kept_indices.size() >= alloc[2].kept_indices.size());
+    }
+
+    // BentCard = 4 tris/leaf. Tight L2 budget.
+    {
+        ts::LeafBudget budget;
+        budget.l0_tris = 100000;
+        budget.l1_tris = 100000;
+        budget.l2_tris = 50;
+        budget.l3_tris = 0;
+
+        const auto alloc = ts::allocate_leaves_all_lods(
+            sites,
+            ts::LeafGeometryType::BentCard,
+            ts::LeafShape::OakLobed,
+            /*cluster_count_per_tip*/ 1,
+            budget,
+            /*seed_effective*/ 0xC2'03'00'00'00'00'00'02ULL);
+
+        // All LODs stay BentCard.
+        REQUIRE(alloc[0].emitted_type == ts::LeafGeometryType::BentCard);
+        REQUIRE(alloc[1].emitted_type == ts::LeafGeometryType::BentCard);
+        REQUIRE(alloc[2].emitted_type == ts::LeafGeometryType::BentCard);
+        // Budget compliance: cap_L2 = 50/4 = 12 leaves.
+        REQUIRE(alloc[2].estimated_tris <= budget.l2_tris);
+    }
 }
 
-TEST_CASE("[treegen_lod_leaves] BentCrossCluster downgrade ladder",
+TEST_CASE("[treegen_lod_leaves] LOD leaf scale increases with LOD index",
           "[treegen][treegen_lod_leaves]") {
-    // BentCrossCluster(N=2) = 8 tris/leaf. 300 sites.
-    // L0: budget=100000 fits; L1: budget=100000 fits.
-    // L2: raw_K=30, cost=30*8=240. budget=100 → must downgrade.
-    // Ladder: BentCrossCluster(2)→BentCrossCluster(1)→BentCard→SingleCard.
-    // BentCrossCluster(1)=4 tris, 30*4=120 > 100, still overshoots.
-    // BentCard=4 tris, 30*4=120 > 100, still overshoots.
-    // SingleCard=2 tris, 30*2=60 <= 100, fits.
-    std::vector<ts::LeafSite> sites(300);
+    // C3-LOD-quality: leaves are scaled up at lower LODs to maintain canopy
+    // coverage. Verify by checking that per-leaf vertex extent grows across
+    // LODs in the full emit pipeline.
+    namespace tsp = rynx::test_support;
 
-    ts::LeafBudget budget;
-    budget.l0_tris = 100000;
-    budget.l1_tris = 100000;
-    budget.l2_tris = 100;
-    budget.l3_tris = 0;
+    const auto fixture = tsp::find_repo_file("tools/rynx-treegen/scenarios/c3_oak.json");
+    REQUIRE_FALSE(fixture.empty());
 
-    const auto alloc = ts::allocate_leaves_all_lods(
-        sites,
-        ts::LeafGeometryType::BentCrossCluster,
-        ts::LeafShape::OakLobed,
-        /*cluster_count_per_tip*/ 2,
-        budget,
-        /*seed_effective*/ 0xC2'03'00'00'00'00'00'01ULL);
+    ts::Scenario s = ts::load_scenario(fixture);
+    const uint64_t seed_effective = 42ull ^ s.scenario_fnv;
+    ts::TreeSkeleton skel = ts::grow_skeleton(s.tree, seed_effective);
 
-    // L0 + L1 stay BentCrossCluster (budget fits).
-    REQUIRE(alloc[0].emitted_type == ts::LeafGeometryType::BentCrossCluster);
-    REQUIRE(alloc[1].emitted_type == ts::LeafGeometryType::BentCrossCluster);
-    // L2 must downgrade past BentCrossCluster (too expensive).
-    REQUIRE(alloc[2].emitted_type != ts::LeafGeometryType::BentCrossCluster);
-    REQUIRE(alloc[2].emitted_type != ts::LeafGeometryType::BentCard);
+    auto lp_opts = ts::leaf_placement::options_from_descriptor(s.tree.leaves);
+    skel.leaf_sites = ts::leaf_placement::generate_leaf_sites(skel, lp_opts, seed_effective);
+    REQUIRE(skel.leaf_sites.size() > 100u);
 
-    // Budget compliance.
-    REQUIRE(alloc[0].estimated_tris <= budget.l0_tris);
-    REQUIRE(alloc[1].estimated_tris <= budget.l1_tris);
-    REQUIRE(alloc[2].estimated_tris <= budget.l2_tris);
+    ts::BarkMeshOptions base_opts;
+    base_opts.tree_height_m   = s.tree.height_m;
+    base_opts.seam_offset_rad = 0.0f;
 
-    // Monotonicity.
-    REQUIRE(alloc[0].kept_indices.size() >= alloc[1].kept_indices.size());
-    REQUIRE(alloc[1].kept_indices.size() >= alloc[2].kept_indices.size());
-}
+    ts::LodBudget   bark_budget;
+    ts::LeafBudget  leaf_budget;
 
-TEST_CASE("[treegen_lod_leaves] BentCard downgrades through full ladder to SingleCard",
-          "[treegen][treegen_lod_leaves]") {
-    // Starting from BentCard (4 tris/leaf). 300 sites, L2 raw_K=30.
-    // Budget L2=50 → 30*4=120 > 50, must downgrade to SingleCard (2 tris),
-    // cap=25, 25*2=50<=50.
-    std::vector<ts::LeafSite> sites(300);
+    ts::LeafMeshOptions leaf_geom_opts;
+    leaf_geom_opts.geometry_type         = s.tree.leaves.geometry_type;
+    leaf_geom_opts.shape                 = s.tree.leaves.shape;
+    leaf_geom_opts.leaf_size_m           = s.tree.leaves.leaf_size_m;
+    leaf_geom_opts.cluster_count_per_tip = s.tree.leaves.cluster_count_per_tip;
+    leaf_geom_opts.bend_half_angle       = s.tree.leaves.leaf_bend_half_angle;
 
-    ts::LeafBudget budget;
-    budget.l0_tris = 100000;
-    budget.l1_tris = 100000;
-    budget.l2_tris = 50;
-    budget.l3_tris = 0;
+    auto lods = ts::emit_all_lods(skel, skel.leaf_sites, base_opts, bark_budget,
+                                  leaf_budget, leaf_geom_opts,
+                                  s.tree.height_m, seed_effective);
+    REQUIRE(lods.size() == 3u);
 
-    const auto alloc = ts::allocate_leaves_all_lods(
-        sites,
-        ts::LeafGeometryType::BentCard,
-        ts::LeafShape::OakLobed,
-        /*cluster_count_per_tip*/ 1,
-        budget,
-        /*seed_effective*/ 0xC2'03'00'00'00'00'00'02ULL);
+    // Compute per-leaf AABB extent for each LOD (using first leaf's verts).
+    // With frozen type and scale factor L0=1.0 L1=1.4 L2=2.0, the per-leaf
+    // extent should grow monotonically.
+    auto leaf_extent = [](const ts::LodOutput& lod, int verts_per_leaf_n) -> float {
+        if (!lod.has_leaves || lod.leaf_positions.size() < static_cast<size_t>(verts_per_leaf_n * 3))
+            return 0.0f;
+        float max_dist = 0.0f;
+        const float cx = lod.leaf_positions[0];
+        const float cy = lod.leaf_positions[1];
+        const float cz = lod.leaf_positions[2];
+        for (int i = 1; i < verts_per_leaf_n; ++i) {
+            const float dx = lod.leaf_positions[static_cast<size_t>(i * 3 + 0)] - cx;
+            const float dy = lod.leaf_positions[static_cast<size_t>(i * 3 + 1)] - cy;
+            const float dz = lod.leaf_positions[static_cast<size_t>(i * 3 + 2)] - cz;
+            max_dist = std::max(max_dist, dx * dx + dy * dy + dz * dz);
+        }
+        return std::sqrt(max_dist);
+    };
 
-    REQUIRE(alloc[0].emitted_type == ts::LeafGeometryType::BentCard);
-    REQUIRE(alloc[1].emitted_type == ts::LeafGeometryType::BentCard);
-    REQUIRE(alloc[2].emitted_type == ts::LeafGeometryType::SingleCard);
+    const int vpl = ts::verts_per_leaf(leaf_geom_opts.geometry_type,
+                                       leaf_geom_opts.shape,
+                                       leaf_geom_opts.cluster_count_per_tip);
+    const float e0 = leaf_extent(lods[0], vpl);
+    const float e1 = leaf_extent(lods[1], vpl);
+    const float e2 = leaf_extent(lods[2], vpl);
 
-    REQUIRE(alloc[2].estimated_tris <= budget.l2_tris);
+    INFO("leaf_extent L0=" << e0 << " L1=" << e1 << " L2=" << e2);
+    REQUIRE(e0 > 0.0f);
+    REQUIRE(e1 > e0 * 1.1f);   // L1 scale 1.4x — expect at least 1.1x
+    REQUIRE(e2 > e1 * 1.1f);   // L2 scale 2.0x — expect at least 1.1x above L1
 }
 
 TEST_CASE("[treegen_lod_leaves] determinism — second emit byte-equal to first",

@@ -89,6 +89,7 @@ struct BranchStripOptions {
     float strip_droop_angle       = 0.15f;   // radians
     float strip_angular_offset    = 0.0f;    // radians around branch axis
     float strip_radius_threshold  = 0.02f;   // multi-strip threshold
+    int   min_strips_per_segment  = 3;
     int   max_strips_per_segment  = 3;
 };
 

@@ -643,6 +643,69 @@ TEST_CASE("treegen_leaf_geometry: BentCard normals equal site.normal",
     }
 }
 
+TEST_CASE("treegen_leaf_geometry: branch-strip TBN is orthonormal and non-degenerate",
+          "[treegen][treegen_leaf_geometry][treegen_branch_strip_tbn]") {
+    // Synthetic 2-node skeleton: root at origin, child at a non-axis-aligned position.
+    treegen::TreeSkeleton skel;
+    {
+        treegen::BranchNode root;
+        root.position = treegen::vec3{0.0f, 0.0f, 0.0f};
+        root.radius = 0.05f;
+        root.depth = 0;
+        root.parent_index = -1;
+        skel.nodes.push_back(root);
+
+        treegen::BranchNode child;
+        child.position = treegen::vec3{1.0f, 0.0f, 2.0f};
+        child.radius = 0.04f;
+        child.depth = 4;
+        child.parent_index = 0;
+        skel.nodes.push_back(child);
+    }
+
+    treegen::BranchStripOptions opts;
+    opts.strip_width_m          = 0.4f;
+    opts.strip_droop_angle      = 0.15f;
+    opts.strip_angular_offset   = 0.0f;
+    opts.strip_radius_threshold = 0.02f;
+    opts.max_strips_per_segment = 3;
+
+    const int min_branch_depth = 3;
+    const float threshold = opts.strip_radius_threshold;
+    auto out = treegen::build_branch_strip_mesh(skel, opts, min_branch_depth, threshold);
+
+    // Must have emitted at least one strip quad (4 verts).
+    const size_t n_verts = out.positions.size() / 3;
+    REQUIRE(n_verts >= 4u);
+    REQUIRE(out.tangents.size() / 4 == n_verts);
+    REQUIRE(out.normals.size()  / 3 == n_verts);
+
+    for (size_t i = 0; i < n_verts; ++i) {
+        const treegen::vec3 T{
+            out.tangents[i * 4 + 0],
+            out.tangents[i * 4 + 1],
+            out.tangents[i * 4 + 2],
+        };
+        const treegen::vec3 N{
+            out.normals[i * 3 + 0],
+            out.normals[i * 3 + 1],
+            out.normals[i * 3 + 2],
+        };
+        const float T_len = vlen(T);
+        const float N_len = vlen(N);
+        const float TdotN = treegen::dot(T, N);
+        const treegen::vec3 B = treegen::cross(N, T);
+        const float B_len = vlen(B);
+
+        INFO("vert=" << i << " |T|=" << T_len << " |N|=" << N_len
+             << " T.N=" << TdotN << " |B|=" << B_len);
+        REQUIRE(std::abs(T_len - 1.0f) < 1e-5f);
+        REQUIRE(std::abs(N_len - 1.0f) < 1e-5f);
+        REQUIRE(std::abs(TdotN) < 1e-5f);
+        REQUIRE(B_len > 0.99f);
+    }
+}
+
 TEST_CASE("treegen_leaf_geometry: tris_per_leaf SoT matches emitter output",
           "[treegen][treegen_leaf_geometry][treegen_leaf_geom_sot]") {
     const auto sites = make_synthetic_sites();
@@ -673,4 +736,164 @@ TEST_CASE("treegen_leaf_geometry: tris_per_leaf SoT matches emitter output",
              << " sot=" << sot << " actual=" << actual_per_leaf);
         REQUIRE(actual_per_leaf == sot);
     }
+}
+
+TEST_CASE("treegen_leaf_geometry: strip angular separation is pi/N",
+          "[treegen][treegen_leaf_geometry][treegen_strip_angular]") {
+    // For N strips, consecutive normals should be separated by pi/N radians.
+    // Strips are bilateral (visible from both sides), so pi/N gives maximum
+    // angular coverage: N=2 -> 90 deg, N=3 -> 60 deg.
+
+    auto make_skel = []() {
+        treegen::TreeSkeleton skel;
+        treegen::BranchNode root;
+        root.position = treegen::vec3{0.0f, 0.0f, 0.0f};
+        root.radius = 0.06f;
+        root.depth = 0;
+        root.parent_index = -1;
+        skel.nodes.push_back(root);
+
+        treegen::BranchNode child;
+        child.position = treegen::vec3{0.0f, 0.0f, 1.0f};
+        child.radius = 0.05f;
+        child.depth = 3;
+        child.parent_index = 0;
+        skel.nodes.push_back(child);
+        return skel;
+    };
+
+    constexpr float k_pi = 3.14159265358979323846f;
+
+    for (int N = 2; N <= 3; ++N) {
+        auto skel = make_skel();
+
+        treegen::BranchStripOptions opts;
+        opts.strip_width_m          = 0.4f;
+        opts.strip_droop_angle      = 0.0f;   // no droop — keeps normals in XY plane
+        opts.strip_angular_offset   = 0.0f;
+        opts.strip_radius_threshold = 0.01f;
+        opts.min_strips_per_segment = N;
+        opts.max_strips_per_segment = N;
+
+        auto out = treegen::build_branch_strip_mesh(skel, opts, /*min_branch_depth=*/1, 0.01f);
+
+        // N strips * 4 verts each.
+        const size_t n_verts = out.positions.size() / 3;
+        REQUIRE(n_verts == static_cast<size_t>(N) * 4u);
+
+        // Extract per-strip normal from the first vertex of each quad.
+        std::vector<treegen::vec3> strip_normals;
+        for (int s = 0; s < N; ++s) {
+            const size_t vi = static_cast<size_t>(s) * 4;
+            strip_normals.push_back(treegen::vec3{
+                out.normals[vi * 3 + 0],
+                out.normals[vi * 3 + 1],
+                out.normals[vi * 3 + 2],
+            });
+        }
+
+        // Angular separation between consecutive strip normals should be pi/N.
+        const float expected_sep = k_pi / static_cast<float>(N);
+        for (int s = 0; s < N - 1; ++s) {
+            const float d = treegen::dot(strip_normals[static_cast<size_t>(s)],
+                                         strip_normals[static_cast<size_t>(s + 1)]);
+            const float actual_angle = std::acos(std::min(1.0f, std::max(-1.0f, d)));
+            INFO("N=" << N << " s=" << s << " expected=" << expected_sep
+                 << " actual=" << actual_angle);
+            REQUIRE(std::abs(actual_angle - expected_sep) < 0.01f);
+        }
+    }
+}
+
+TEST_CASE("treegen_leaf_geometry: min_strips_per_segment enforced on thin branches",
+          "[treegen][treegen_leaf_geometry][treegen_strip_min_count]") {
+    // Thin branches (radius=0.01m, well below the 0.04m 2-strip threshold)
+    // should still emit min_strips_per_segment=2 strips per segment.
+    treegen::TreeSkeleton skel;
+    {
+        treegen::BranchNode root;
+        root.position = treegen::vec3{0.0f, 0.0f, 0.0f};
+        root.radius = 0.01f;  // thin — below any radius threshold
+        root.depth = 0;
+        root.parent_index = -1;
+        skel.nodes.push_back(root);
+
+        treegen::BranchNode child;
+        child.position = treegen::vec3{0.0f, 0.0f, 1.0f};
+        child.radius = 0.01f;
+        child.depth = 3;
+        child.parent_index = 0;
+        skel.nodes.push_back(child);
+    }
+
+    treegen::BranchStripOptions opts;
+    opts.strip_width_m          = 0.4f;
+    opts.strip_droop_angle      = 0.0f;
+    opts.strip_angular_offset   = 0.0f;
+    opts.strip_radius_threshold = 0.02f;  // avg_radius=0.01 < threshold*2=0.04
+    opts.min_strips_per_segment = 2;
+    opts.max_strips_per_segment = 3;
+
+    auto out = treegen::build_branch_strip_mesh(skel, opts, /*min_branch_depth=*/1, 0.02f);
+
+    // 1 qualifying segment * 2 strips * 4 verts = 8 verts.
+    const size_t n_verts = out.positions.size() / 3;
+    REQUIRE(n_verts == 8u);
+    // 1 qualifying segment * 2 strips * 2 tris * 3 indices = 12 indices.
+    REQUIRE(out.indices.size() == 12u);
+}
+
+TEST_CASE("treegen_leaf_geometry: per-seed angular offset changes strip orientation",
+          "[treegen][treegen_leaf_geometry][needle_strip]") {
+    // Two calls to build_branch_strip_mesh with different strip_angular_offset
+    // values must produce different vertex normals — proving the offset actually
+    // rotates the strip fan.
+    treegen::TreeSkeleton skel;
+    {
+        treegen::BranchNode root;
+        root.position = treegen::vec3{0.0f, 0.0f, 0.0f};
+        root.radius = 0.05f;
+        root.depth = 0;
+        root.parent_index = -1;
+        skel.nodes.push_back(root);
+
+        treegen::BranchNode child;
+        child.position = treegen::vec3{0.0f, 0.0f, 2.0f};
+        child.radius = 0.04f;
+        child.depth = 3;
+        child.parent_index = 0;
+        skel.nodes.push_back(child);
+    }
+
+    auto make_opts = [](float angular_offset) {
+        treegen::BranchStripOptions opts;
+        opts.strip_width_m          = 0.4f;
+        opts.strip_droop_angle      = 0.0f;
+        opts.strip_angular_offset   = angular_offset;
+        opts.strip_radius_threshold = 0.01f;
+        opts.min_strips_per_segment = 2;
+        opts.max_strips_per_segment = 2;
+        return opts;
+    };
+
+    auto opts_a = make_opts(0.0f);
+    auto opts_b = make_opts(1.0f);
+    auto out_a = treegen::build_branch_strip_mesh(skel, opts_a, /*min_branch_depth=*/1, 0.01f);
+    auto out_b = treegen::build_branch_strip_mesh(skel, opts_b, /*min_branch_depth=*/1, 0.01f);
+
+    // Both must emit the same number of verts (same skeleton + same strip count).
+    const size_t n_a = out_a.normals.size() / 3;
+    const size_t n_b = out_b.normals.size() / 3;
+    REQUIRE(n_a >= 4u);
+    REQUIRE(n_a == n_b);
+
+    // At least one vertex normal must differ between the two runs.
+    bool any_differ = false;
+    for (size_t i = 0; i < n_a && !any_differ; ++i) {
+        const treegen::vec3 na{out_a.normals[i*3+0], out_a.normals[i*3+1], out_a.normals[i*3+2]};
+        const treegen::vec3 nb{out_b.normals[i*3+0], out_b.normals[i*3+1], out_b.normals[i*3+2]};
+        const treegen::vec3 d{na.x - nb.x, na.y - nb.y, na.z - nb.z};
+        if (d.x*d.x + d.y*d.y + d.z*d.z > 1e-8f) any_differ = true;
+    }
+    REQUIRE(any_differ);
 }

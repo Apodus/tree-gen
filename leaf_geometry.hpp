@@ -44,6 +44,11 @@ struct LeafMeshOutput {
     // C1 P6 — per-vertex tangent (xyzw packed, 4 floats/vert). Card right
     // vector in UV space; w=+1 (right-handed TBN: B=cross(N,T)*w).
     std::vector<float>    tangents;
+    // C8-wind P1 — host skeleton node (bone) per leaf vertex. For build_leaf_mesh
+    // this is site.branch_id; for build_branch_strip_mesh it's the child node.
+    // Length == positions.size() / 3. Leaves/strips are RIGID (bone_blend = 0
+    // everywhere) — the rigid all-zero blend is supplied at LOD-assembly time.
+    std::vector<uint16_t> bone_index;
 };
 
 // Per-emitter vertex / triangle counts. Exposed so the test can pin them

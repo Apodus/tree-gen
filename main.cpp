@@ -470,6 +470,11 @@ int main(int argc, char** argv) {
                     bark_prim.indices_u32 = std::span<const uint32_t>(lod.indices_u32.data(), lod.indices_u32.size());
                     bark_prim.wind_weights_packed = std::span<const uint8_t>(
                         lod.wind_weights_packed.data(), lod.wind_weights_packed.size());
+                    // C8-wind P1 — bark _RYNX_BONE per-vertex binding.
+                    bark_prim.bone_index = std::span<const uint16_t>(
+                        lod.bark_bone_index.data(), lod.bark_bone_index.size());
+                    bark_prim.bone_blend = std::span<const uint8_t>(
+                        lod.bark_bone_blend.data(), lod.bark_bone_blend.size());
                     // C9 P3 — L3 billboard uses impostor atlas when baked.
                     if (lod.lod_index == 3 && impostor_tex_index >= 0) {
                         bark_prim.material.base_color_tex_index = impostor_tex_index;
@@ -500,6 +505,11 @@ int main(int argc, char** argv) {
                         leaf_prim.wind_weights_packed = std::span<const uint8_t>(
                             lod.leaf_wind_weights_packed.data(),
                             lod.leaf_wind_weights_packed.size());
+                        // C8-wind P1 — leaf _RYNX_BONE binding (rigid, blend=0).
+                        leaf_prim.bone_index = std::span<const uint16_t>(
+                            lod.leaf_bone_index.data(), lod.leaf_bone_index.size());
+                        leaf_prim.bone_blend = std::span<const uint8_t>(
+                            lod.leaf_bone_blend.data(), lod.leaf_bone_blend.size());
                         leaf_prim.material.alpha_mode   = "MASK";
                         leaf_prim.material.alpha_cutoff = 0.5f;
                         leaf_prim.material.base_color_tex_index         = 4;
@@ -516,6 +526,10 @@ int main(int argc, char** argv) {
                     md.lod_index             = lod.lod_index;
                     md.lod_max_distance_m    = lod.lod_max_distance_m;
                     md.lod_screen_height_px  = lod.lod_screen_height_px;
+                    // C8-wind P1 — full-skeleton bone table for this LOD.
+                    md.bone_table            = std::span<const float>(
+                        lod.bone_table_records.data(), lod.bone_table_records.size());
+                    md.bone_count            = lod.bone_count;
                     if (li == 0) {
                         md.collision_half_length = capsule.half_length;
                         md.collision_radius      = capsule.radius;

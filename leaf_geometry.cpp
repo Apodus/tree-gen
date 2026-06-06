@@ -60,7 +60,10 @@ inline uint8_t quantize_wind(float w) {
 // ground). Leaves on thick branches get trunk/branch influence; terminal-twig
 // leaves stay near pure leaf tier.
 void push_leaf_vert_meta(LeafMeshOutput& out, vec3 normal, vec3 tangent_dir,
-                         float branch_depth_fraction, int n_verts) {
+                         float branch_depth_fraction, int branch_id, int n_verts) {
+    // C8-wind P1 — host bone = site.branch_id (nearest skeleton node). Negative
+    // branch_id (unbound site) clamps to 0 (root) so the index is always valid.
+    const uint16_t bone = static_cast<uint16_t>(branch_id < 0 ? 0 : branch_id);
     const float d  = clamp01(branch_depth_fraction);
     const float od = 1.0f - d;
     const uint8_t trunk_b  = quantize_wind(od * od);            // (1-d)^2
@@ -79,6 +82,7 @@ void push_leaf_vert_meta(LeafMeshOutput& out, vec3 normal, vec3 tangent_dir,
         out.wind_weights_packed.push_back(twig_b);
         out.wind_weights_packed.push_back(leaf_b);
         out.material_slots.push_back(1);
+        out.bone_index.push_back(bone);
     }
 }
 
@@ -125,7 +129,7 @@ void emit_single_card(LeafMeshOutput& out,
         const vec2 uv = uv_for_quad_corner(opts.shape, corners[i].x, corners[i].y);
         push_uv(out.uvs, uv.x, uv.y);
     }
-    push_leaf_vert_meta(out, up, right, site.branch_depth_fraction, 4);
+    push_leaf_vert_meta(out, up, right, site.branch_depth_fraction, site.branch_id, 4);
 
     out.indices.push_back(vbase + 0);
     out.indices.push_back(vbase + 1);
@@ -186,7 +190,7 @@ void emit_bent_card(LeafMeshOutput& out,
         push_xyz(out.positions, verts[i]);
         push_uv(out.uvs, uvcoords[i].x, uvcoords[i].y);
     }
-    push_leaf_vert_meta(out, up, right, site.branch_depth_fraction, 6);
+    push_leaf_vert_meta(out, up, right, site.branch_depth_fraction, site.branch_id, 6);
 
     // 4 tris: left half (0-1-4, 0-4-3), right half (1-2-5, 1-5-4).
     out.indices.push_back(vbase + 0);
@@ -260,7 +264,7 @@ void emit_bent_cross_cluster(LeafMeshOutput& out,
             push_xyz(out.positions, verts[i]);
             push_uv(out.uvs, uvcoords[i].x, uvcoords[i].y);
         }
-        push_leaf_vert_meta(out, up, right_k, site.branch_depth_fraction, 6);
+        push_leaf_vert_meta(out, up, right_k, site.branch_depth_fraction, site.branch_id, 6);
 
         out.indices.push_back(vbase + 0);
         out.indices.push_back(vbase + 1);
@@ -363,7 +367,7 @@ void emit_procedural_veined(LeafMeshOutput& out,
         const vec2 uv = uv_for_quad_corner(opts.shape, vert2d.x, vert2d.y);
         push_uv(out.uvs, uv.x, uv.y);
     }
-    push_leaf_vert_meta(out, up, right, site.branch_depth_fraction,
+    push_leaf_vert_meta(out, up, right, site.branch_depth_fraction, site.branch_id,
                         static_cast<int>(shape_mesh.verts.size()));
 
     for (uint16_t i : shape_mesh.tris) {
@@ -475,6 +479,7 @@ LeafMeshOutput build_branch_strip_mesh(const TreeSkeleton&      skel,
     out.indices.reserve(seg_count * 3 * 6);
     out.wind_weights_packed.reserve(seg_count * 3 * 4 * 4);
     out.material_slots.reserve(seg_count * 3 * 4);
+    out.bone_index.reserve(seg_count * 3 * 4);
 
     for (size_t i = 1; i < skel.nodes.size(); ++i) {
         const auto& child  = skel.nodes[i];
@@ -575,6 +580,8 @@ LeafMeshOutput build_branch_strip_mesh(const TreeSkeleton&      skel,
                 out.wind_weights_packed.push_back(twig_b);
                 out.wind_weights_packed.push_back(leaf_b);
                 out.material_slots.push_back(1);
+                // C8-wind P1 — host bone = the child node of this segment (i).
+                out.bone_index.push_back(static_cast<uint16_t>(i));
             }
 
             // Two triangles (CCW).

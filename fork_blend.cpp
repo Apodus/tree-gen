@@ -299,6 +299,11 @@ int emit_collar_ring(BarkMeshOutput& bark,
         bark.tangents.push_back(1.0f); // w = +1 right-handed
 
         bark.per_vertex_node_index.push_back(node_index);
+        // C8-wind P1 — collar rings sit at the fork (parent end of the child
+        // segment, t=0) → blend fully toward the parent bone (255), matching
+        // emit_ring's quantize(1 - t) convention. Keeps bone_blend.size()
+        // parity with the vertex stream after fork blend appends verts.
+        bark.bone_blend.push_back(255u);
     }
     return start;
 }
@@ -603,6 +608,9 @@ void apply_skin_rim_blend(BarkMeshOutput& bark,
             bark.tangents.push_back(0.0f);
             bark.tangents.push_back(1.0f);
             bark.per_vertex_node_index.push_back(fork_node);
+            // C8-wind P1 — crotch centroid sits on the fork node itself →
+            // hosted by fork_node, fully host (blend 0). Maintains length parity.
+            bark.bone_blend.push_back(0u);
 
             const uint32_t cIdx = static_cast<uint32_t>(centroid_idx);
 

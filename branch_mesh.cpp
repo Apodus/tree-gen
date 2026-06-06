@@ -51,9 +51,17 @@ vec3 parallel_transport(vec3 prev_right, vec3 new_axis) {
 // Emit one ring of (N+1) verts (seam-duplicated) at `center` orthogonal to
 // `axis`, radius `radius`, axial param `v_axial`. Returns starting vertex
 // index.
+// Quantize a [0,1] blend weight to a u8 — same idiom as wind_weights.cpp.
+inline uint8_t quantize_blend(float w) {
+    const float c = (w < 0.0f) ? 0.0f : (w > 1.0f ? 1.0f : w);
+    return static_cast<uint8_t>(c * 255.0f + 0.5f);
+}
+
 int emit_ring(cpu_mesh_out& mesh,
               std::vector<float>& tangents,
               std::vector<int>& vert_node_idx,
+              std::vector<uint8_t>& bone_blend,
+              uint8_t ring_blend,
               int node_index,
               vec3 center,
               vec3 axis,
@@ -97,6 +105,7 @@ int emit_ring(cpu_mesh_out& mesh,
         tangents.push_back(1.0f); // w = +1 right-handed
 
         vert_node_idx.push_back(node_index);
+        bone_blend.push_back(ring_blend);
     }
     return start;
 }
@@ -226,7 +235,11 @@ BarkMeshOutput build_bark_mesh(const TreeSkeleton& skel, const BarkMeshOptions& 
                 }
             }
 
-            const int ring_start = emit_ring(mesh, out.tangents, vert_node_idx, i, center, seg_dir,
+            // C8-wind P1 — parent-blend = quantize(1 - t): 255 at parent end
+            // (t=0), 0 at child end (t=1). 2-bone LBS fork-continuity.
+            const uint8_t ring_blend = quantize_blend(1.0f - t);
+            const int ring_start = emit_ring(mesh, out.tangents, vert_node_idx, out.bone_blend,
+                                             ring_blend, i, center, seg_dir,
                                              seg_right, seg_up, flared_radius, N, v_axial,
                                              opts.seam_offset_rad);
 
@@ -269,6 +282,7 @@ BarkMeshOutput build_bark_mesh(const TreeSkeleton& skel, const BarkMeshOptions& 
             out.tangents.push_back(seg_right.z);
             out.tangents.push_back(1.0f);
             vert_node_idx.push_back(i);
+            out.bone_blend.push_back(0u); // tip cap: t=1, fully host (no parent blend)
 
             // Fan from last ring to centroid.
             for (int j = 0; j < N; ++j) {
@@ -309,10 +323,10 @@ BarkMeshOutput build_bark_mesh(const TreeSkeleton& skel, const BarkMeshOptions& 
         apply_skin_rim_blend(out, skel, zones, opts);
     }
 
-    // P3 — wind weight bake. After fork blend so any new (fan-stitched)
-    // vertices that may have been appended would be covered — current
-    // skin-rim blend only mutates existing positions + appends indices,
-    // not vertices, but the order is the principled one.
+    // P3 — wind weight bake. Runs AFTER fork blend so the appended collar-ring
+    // and crotch-centroid vertices are covered: apply_skin_rim_blend mutates
+    // existing positions AND appends new vertices (alongside per_vertex_node_index,
+    // tangents, and bone_blend), so vcount here is the final count.
     const size_t vcount = mesh.positions.size() / 3;
     std::vector<float> z_per_vert;
     z_per_vert.reserve(vcount);

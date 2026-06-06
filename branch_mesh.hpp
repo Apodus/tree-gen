@@ -76,6 +76,13 @@ struct BarkMeshOutput {
     // C1 P6 — per-vertex tangent (xyzw packed, 4 floats/vert). Circumferential
     // U-derivative of cylinder surface; w=+1 (right-handed TBN: B=cross(N,T)*w).
     std::vector<float>        tangents;
+    // C8-wind P1 — per-vertex parent-blend byte for 2-bone linear-blend
+    // rotation (host bone = per_vertex_node_index[v]; other bone = that node's
+    // parent). blend = quantize(1 - t), where t is the ring's axial fraction
+    // along its parent→child segment: t=0 (parent end) → 255 (fully toward
+    // parent), t=1 (child end / tip cap) → 0 (fully host). Fork-continuity.
+    // Length == mesh.positions.size() / 3.
+    std::vector<uint8_t>      bone_blend;
 };
 
 BarkMeshOutput build_bark_mesh(const TreeSkeleton& skel, const BarkMeshOptions& opts);

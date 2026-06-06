@@ -43,6 +43,21 @@ struct LodOutput {
     std::vector<uint8_t>  leaf_wind_weights_packed;
     std::vector<int32_t>  leaf_material_slots;
     std::vector<float>    leaf_tangents;            // C1 P6 — xyzw packed, 4 floats/vert
+
+    // C8-wind P1 — per-vertex bone binding for analytic rotational wind.
+    // bark_bone_index = host node per bark vert (from per_vertex_node_index);
+    // bark_bone_blend = parent-blend byte (fork-continuity 2-bone LBS).
+    // leaf_bone_index = host node per leaf vert; leaf_bone_blend = all zeros
+    // (leaves/strips are rigid). bone_table_records = the full skeleton bone
+    // table (8 floats/bone), identical across LODs (no per-LOD decimation).
+    // Empty for L3 (billboard, no real skeleton geometry → no _RYNX_BONE).
+    std::vector<uint16_t> bark_bone_index;
+    std::vector<uint8_t>  bark_bone_blend;
+    std::vector<uint16_t> leaf_bone_index;
+    std::vector<uint8_t>  leaf_bone_blend;
+    std::vector<float>    bone_table_records;
+    uint32_t              bone_count = 0;
+
     bool                  has_leaves = false;
 };
 

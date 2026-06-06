@@ -63,6 +63,12 @@ struct PrimitiveData {
     // C2 P2: `_RYNX_WIND` per-vertex 4-tier influences. Empty span = no extension
     // for this primitive. Length must equal positions.size()/3 * 4.
     std::span<const uint8_t>  wind_weights_packed;
+    // C8-wind P1: `_RYNX_BONE` per-vertex rotational-wind binding. bone_index =
+    // host skeleton node per vertex (SCALAR u16); bone_blend = parent-blend per
+    // vertex (SCALAR u8 normalized, 2-bone LBS). Both empty = no bone binding
+    // for this primitive. When present, each must have length == vcount.
+    std::span<const uint16_t> bone_index;
+    std::span<const uint8_t>  bone_blend;
     MaterialSpec              material;
 };
 
@@ -77,6 +83,12 @@ struct MeshData {
     // _RYNX_COLLISION capsule (mesh[0] only). negative half_length = not set.
     float collision_half_length = -1.0f;
     float collision_radius      = 0.0f;
+    // C8-wind P1 — `_RYNX_BONE` skeleton bone table for this mesh: 8 floats/bone
+    // (see bone_table.hpp). Emitted as a target=0 bufferView + a mesh-level
+    // extension `_RYNX_BONE = {"bones": <bufferView>, "count": <bone_count>}`.
+    // Empty span / bone_count == 0 = no bone table for this mesh.
+    std::span<const float> bone_table;
+    uint32_t               bone_count = 0;
 };
 
 namespace glb_detail {
@@ -145,6 +157,8 @@ struct PrimitiveAccessors {
     int tangents_acc;       // C1 P6: -1 if absent
     int indices_acc;
     int wind_weights_acc;   // -1 if absent
+    int bone_index_acc;     // C8-wind P1: -1 if absent
+    int bone_blend_acc;     // C8-wind P1: -1 if absent
     bool material_emit;     // always true for now (one material per primitive)
 };
 
@@ -159,6 +173,8 @@ struct MeshJsonMeta {
     float lod_screen_height_px = 0.0f;
     float collision_half_length = -1.0f;  // negative = not set
     float collision_radius      = 0.0f;
+    int   bone_table_bv  = -1;  // C8-wind P1: bufferView idx of bone table; -1 = none
+    int   bone_count     = 0;   // C8-wind P1: bone count (ignored when bv < 0)
 };
 
 // C6 P4 — forward-only material JSON emitter. Replaces the pop_back() hack
@@ -354,7 +370,8 @@ inline std::string build_json_multi_mesh(
     int image_count = 0,
     const std::vector<int>* image_bv_indices = nullptr,
     bool any_translucency = false,
-    bool any_collision = false)
+    bool any_collision = false,
+    bool any_bone = false)
 {
     std::string j;
     j.reserve(4096 + meshes_meta.size() * 256);
@@ -417,7 +434,7 @@ inline std::string build_json_multi_mesh(
 
     // extensionsUsed — emit when any extension is in use.
     const bool has_textures = (image_count > 0);
-    if (any_wind || any_lod || any_translucency || any_collision) {
+    if (any_wind || any_lod || any_translucency || any_collision || any_bone) {
         j += R"(,"extensionsUsed":[)";
         bool first = true;
         auto ext = [&](const char* name) {
@@ -425,6 +442,7 @@ inline std::string build_json_multi_mesh(
             first = false;
             j += '"'; j += name; j += '"';
         };
+        if (any_bone)         ext("_RYNX_BONE");
         if (any_collision)    ext("_RYNX_COLLISION");
         if (any_translucency) ext("_RYNX_LEAF_TRANSLUCENCY");
         if (any_lod)          ext("_RYNX_LOD");
@@ -513,21 +531,49 @@ inline std::string build_json_multi_mesh(
             // material per primitive across all meshes.
             j += i2s(int64_t(mm.first_prim + pi));
             j += R"(,"mode":4)";
-            if (pa.wind_weights_acc >= 0) {
-                j += R"(,"extensions":{"_RYNX_WIND":{"weights":)";
-                j += i2s(pa.wind_weights_acc);
-                j += R"(}})";
+            // Primitive-level extensions: _RYNX_BONE (lexicographic first),
+            // then _RYNX_WIND. Either, both, or neither may be present.
+            const bool has_bone = (pa.bone_index_acc >= 0 && pa.bone_blend_acc >= 0);
+            const bool has_wind = (pa.wind_weights_acc >= 0);
+            if (has_bone || has_wind) {
+                j += R"(,"extensions":{)";
+                bool first_pext = true;
+                if (has_bone) {
+                    j += R"("_RYNX_BONE":{"index":)";
+                    j += i2s(pa.bone_index_acc);
+                    j += R"(,"blend":)";
+                    j += i2s(pa.bone_blend_acc);
+                    j += '}';
+                    first_pext = false;
+                }
+                if (has_wind) {
+                    if (!first_pext) j += ',';
+                    j += R"("_RYNX_WIND":{"weights":)";
+                    j += i2s(pa.wind_weights_acc);
+                    j += '}';
+                }
+                j += '}';
             }
             j += '}';
         }
         j += ']';
-        // Per-mesh extensions (_RYNX_COLLISION, _RYNX_LOD).
-        const bool has_lod = (mm.lod_index >= 0);
-        const bool has_col = (mm.collision_half_length >= 0.0f);
-        if (has_col || has_lod) {
+        // Per-mesh extensions (_RYNX_BONE, _RYNX_COLLISION, _RYNX_LOD).
+        const bool has_lod  = (mm.lod_index >= 0);
+        const bool has_col  = (mm.collision_half_length >= 0.0f);
+        const bool has_bone = (mm.bone_table_bv >= 0 && mm.bone_count > 0);
+        if (has_col || has_lod || has_bone) {
             j += R"(,"extensions":{)";
             bool first_ext = true;
+            if (has_bone) {
+                j += R"("_RYNX_BONE":{"bones":)";
+                j += i2s(mm.bone_table_bv);
+                j += R"(,"count":)";
+                j += i2s(mm.bone_count);
+                j += '}';
+                first_ext = false;
+            }
             if (has_col) {
+                if (!first_ext) j += ',';
                 j += R"("_RYNX_COLLISION":{"type":"capsule","half_length":)";
                 j += f2s(mm.collision_half_length);
                 j += R"(,"radius":)";
@@ -899,6 +945,7 @@ inline bool write_glb_multi_mesh(std::span<const MeshData> meshes,
         bool     has_uvs;
         bool     has_tangents;
         bool     has_wind;
+        bool     has_bone;
     };
     std::vector<PrimResolved> resolved;
     std::vector<glb_detail::MeshJsonMeta> meshes_meta;
@@ -907,6 +954,7 @@ inline bool write_glb_multi_mesh(std::span<const MeshData> meshes,
     bool any_wind      = false;
     bool any_lod       = false;
     bool any_collision = false;
+    bool any_bone      = false;
     for (const auto& mm : meshes) {
         glb_detail::MeshJsonMeta meta;
         meta.first_prim = static_cast<int>(resolved.size());
@@ -918,6 +966,15 @@ inline bool write_glb_multi_mesh(std::span<const MeshData> meshes,
         meta.collision_radius        = mm.collision_radius;
         if (mm.lod_index >= 0) any_lod = true;
         if (mm.collision_half_length >= 0.0f) any_collision = true;
+        // C8-wind P1 — bone table presence (bufferView filled during BIN layout).
+        if (!mm.bone_table.empty() && mm.bone_count > 0) {
+            if (mm.bone_table.size() != size_t(mm.bone_count) * 8u) {
+                set_err("write_glb_multi_mesh: bone_table length must equal bone_count*8");
+                return false;
+            }
+            meta.bone_count = static_cast<int>(mm.bone_count);
+            any_bone = true;
+        }
         meshes_meta.push_back(meta);
 
         for (const auto& p : mm.primitives) {
@@ -950,6 +1007,26 @@ inline bool write_glb_multi_mesh(std::span<const MeshData> meshes,
                 return false;
             }
             if (!p.wind_weights_packed.empty()) any_wind = true;
+            // C8-wind P1 — bone binding: index + blend, both length == vcount.
+            // They must be both-present or both-absent.
+            const bool has_bone_idx   = !p.bone_index.empty();
+            const bool has_bone_blend = !p.bone_blend.empty();
+            if (has_bone_idx != has_bone_blend) {
+                set_err("write_glb_multi_mesh: bone_index and bone_blend must both be present or both absent");
+                return false;
+            }
+            const bool prim_has_bone = has_bone_idx && has_bone_blend;
+            if (prim_has_bone) {
+                if (p.bone_index.size() != size_t(vcount)) {
+                    set_err("write_glb_multi_mesh: bone_index length must equal vcount");
+                    return false;
+                }
+                if (p.bone_blend.size() != size_t(vcount)) {
+                    set_err("write_glb_multi_mesh: bone_blend length must equal vcount");
+                    return false;
+                }
+                any_bone = true;
+            }
             PrimResolved r;
             r.src = &p;
             r.vcount = vcount;
@@ -958,6 +1035,7 @@ inline bool write_glb_multi_mesh(std::span<const MeshData> meshes,
             r.has_uvs = !p.uvs.empty();
             r.has_tangents = !p.tangents.empty();
             r.has_wind = !p.wind_weights_packed.empty();
+            r.has_bone = prim_has_bone;
             resolved.push_back(r);
         }
     }
@@ -1002,6 +1080,8 @@ inline bool write_glb_multi_mesh(std::span<const MeshData> meshes,
         pa.uvs_acc = -1;
         pa.tangents_acc = -1;
         pa.wind_weights_acc = -1;
+        pa.bone_index_acc = -1;
+        pa.bone_blend_acc = -1;
 
         double pmn[3] = { 1e300, 1e300, 1e300 };
         double pmx[3] = { -1e300, -1e300, -1e300 };
@@ -1084,7 +1164,40 @@ inline bool write_glb_multi_mesh(std::span<const MeshData> meshes,
             pa.wind_weights_acc = static_cast<int>(accs.size() - 1);
         }
 
+        // C8-wind P1 — _RYNX_BONE per-vertex binding. index = SCALAR u16 (5123),
+        // blend = SCALAR u8 normalized (5121). ARRAY_BUFFER (34962) bufferViews.
+        if (r.has_bone) {
+            int bi_bv = add_bv(static_cast<int>(r.vcount * sizeof(uint16_t)), 34962);
+            glb_detail::append_bytes(bin, p.bone_index.data(), p.bone_index.size() * sizeof(uint16_t));
+            glb_detail::AccessorMeta ai{};
+            ai.bufferView = bi_bv; ai.byteOffset = 0; ai.componentType = 5123; // UNSIGNED_SHORT
+            ai.count = static_cast<int>(r.vcount); ai.type = "SCALAR";
+            accs.push_back(ai);
+            pa.bone_index_acc = static_cast<int>(accs.size() - 1);
+
+            int bb_bv = add_bv(static_cast<int>(r.vcount * sizeof(uint8_t)), 34962);
+            glb_detail::append_bytes(bin, p.bone_blend.data(), p.bone_blend.size());
+            glb_detail::AccessorMeta ab{};
+            ab.bufferView = bb_bv; ab.byteOffset = 0; ab.componentType = 5121; // UNSIGNED_BYTE
+            ab.count = static_cast<int>(r.vcount); ab.type = "SCALAR";
+            ab.normalized = true;
+            accs.push_back(ab);
+            pa.bone_blend_acc = static_cast<int>(accs.size() - 1);
+        }
+
         prim_accs.push_back(pa);
+    }
+
+    // C8-wind P1 — append per-mesh bone-table bufferViews (target=0, float data).
+    // One bufferView per mesh that supplies a bone table; record its index back
+    // into that mesh's MeshJsonMeta so the mesh-level _RYNX_BONE extension can
+    // reference it.
+    for (size_t mi = 0; mi < meshes.size(); ++mi) {
+        const auto& mm = meshes[mi];
+        if (mm.bone_table.empty() || mm.bone_count == 0) continue;
+        int bt_bv = add_bv(static_cast<int>(mm.bone_table.size() * sizeof(float)), 0);
+        glb_detail::append_bytes(bin, mm.bone_table.data(), mm.bone_table.size() * sizeof(float));
+        meshes_meta[mi].bone_table_bv = bt_bv;
     }
 
     // C6 P4 — append image bufferViews (target=0, 4-byte aligned).
@@ -1110,7 +1223,8 @@ inline bool write_glb_multi_mesh(std::span<const MeshData> meshes,
         static_cast<int>(images.size()),
         images.empty() ? nullptr : &image_bv_indices,
         any_translucency,
-        any_collision);
+        any_collision,
+        any_bone);
 
     size_t json_pad = glb_detail::align_up(json.size()) - json.size();
     json.append(json_pad, ' ');

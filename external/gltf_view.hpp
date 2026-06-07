@@ -369,6 +369,14 @@ struct cpu_mesh {
     // normalized). 4 bytes per vertex; empty when the primitive doesn't
     // carry the extension.
     std::vector<uint8_t> wind_weights_packed;
+
+    // C2 analytic rotational wind: `_RYNX_BONE` per-vertex binding. bone_index
+    // = host skeleton-node index (SCALAR UNSIGNED_SHORT, 1/vert); bone_blend =
+    // parent-blend weight (SCALAR UNSIGNED_BYTE normalized, 1/vert). Both empty
+    // when the primitive lacks the extension. Resolved against the per-mesh
+    // bone table (see read_rynx_bone_table).
+    std::vector<uint16_t> bone_index;
+    std::vector<uint8_t>  bone_blend;
 };
 
 // Per-primitive material descriptor harvested from glTF 2.0 PBR material
@@ -447,6 +455,37 @@ inline bool read_vec4_byte_normalized_accessor(const accessor& acc, const char* 
     return true;
 }
 
+// Read a SCALAR UNSIGNED_SHORT accessor into `out` (one u16 per element).
+// Used for `_RYNX_BONE.index` (per-vertex host bone index).
+inline bool read_scalar_u16_accessor(const accessor& acc, const char* bin, size_t bin_len, std::vector<uint16_t>& out) {
+    if (acc.components != 1) return false;
+    if (acc.component_type != GLTF_UNSIGNED_SHORT) return false;
+    if (acc.first_byte() + acc.stride() * (acc.count - 1) + acc.element_bytes() > bin_len) return false;
+    out.resize(acc.count);
+    for (uint32_t i = 0; i < acc.count; ++i) {
+        const char* e = bin + acc.first_byte() + i * acc.stride();
+        uint16_t v;
+        std::memcpy(&v, e, 2);
+        out[i] = v;
+    }
+    return true;
+}
+
+// Read a SCALAR UNSIGNED_BYTE accessor into `out` (one u8 per element). Used
+// for `_RYNX_BONE.blend` (per-vertex parent-blend weight, normalized). The
+// `normalized` flag is GPU-sampler metadata; bytes are copied verbatim.
+inline bool read_scalar_u8_accessor(const accessor& acc, const char* bin, size_t bin_len, std::vector<uint8_t>& out) {
+    if (acc.components != 1) return false;
+    if (acc.component_type != GLTF_UNSIGNED_BYTE) return false;
+    if (acc.first_byte() + acc.stride() * (acc.count - 1) + acc.element_bytes() > bin_len) return false;
+    out.resize(acc.count);
+    for (uint32_t i = 0; i < acc.count; ++i) {
+        const char* e = bin + acc.first_byte() + i * acc.stride();
+        out[i] = uint8_t(*e);
+    }
+    return true;
+}
+
 inline bool read_index_accessor(const accessor& acc, const char* bin, size_t bin_len, std::vector<uint32_t>& out) {
     if (acc.components != 1) return false;
     uint32_t comp_bytes = gltf_component_bytes(acc.component_type);
@@ -514,6 +553,8 @@ inline bool extract_one_primitive(const jval& root, const jval& prim, const glb_
     out.texcoords.clear();
     out.indices.clear();
     out.wind_weights_packed.clear();
+    out.bone_index.clear();
+    out.bone_blend.clear();
     out.material_index = -1;
 
     if (!read_vec3_accessor(pos_acc, glb.bin_begin, glb.bin_len, out.positions)) {
@@ -570,6 +611,30 @@ inline bool extract_one_primitive(const jval& root, const jval& prim, const glb_
                         if (out.wind_weights_packed.size() != vcount * 4) {
                             out.wind_weights_packed.clear();
                         }
+                    }
+                }
+            }
+        }
+
+        // Analytic rotational wind: `_RYNX_BONE` per-vertex binding. `.index`
+        // is SCALAR UNSIGNED_SHORT (host bone), `.blend` is SCALAR UNSIGNED_BYTE
+        // normalized (parent-blend). Both required and both must match vertex
+        // count — drop the whole binding on any mismatch (atomic, no partials).
+        if (auto* bone = exts->find("_RYNX_BONE")) {
+            const size_t vcount = out.positions.size() / 3;
+            auto* idx_node = bone->find("index");
+            auto* bln_node = bone->find("blend");
+            int idx_acc_i = idx_node ? idx_node->as_int(-1) : -1;
+            int bln_acc_i = bln_node ? bln_node->as_int(-1) : -1;
+            if (idx_acc_i >= 0 && bln_acc_i >= 0) {
+                accessor iacc, bacc;
+                if (resolve_accessor(root, idx_acc_i, iacc) &&
+                    resolve_accessor(root, bln_acc_i, bacc)) {
+                    (void)read_scalar_u16_accessor(iacc, glb.bin_begin, glb.bin_len, out.bone_index);
+                    (void)read_scalar_u8_accessor(bacc, glb.bin_begin, glb.bin_len, out.bone_blend);
+                    if (out.bone_index.size() != vcount || out.bone_blend.size() != vcount) {
+                        out.bone_index.clear();
+                        out.bone_blend.clear();
                     }
                 }
             }
@@ -676,6 +741,67 @@ inline bool read_rynx_lod_extension(const jval& mesh_obj,
         }
     }
     return any;
+}
+
+// Read per-mesh `_RYNX_COLLISION` extension (capsule). Returns true if present.
+inline bool extract_collision_capsule(const jval& mesh_obj,
+                                      float& out_half_length,
+                                      float& out_radius) {
+    auto* exts = mesh_obj.find("extensions");
+    if (!exts) return false;
+    auto* col = exts->find("_RYNX_COLLISION");
+    if (!col) return false;
+    auto* hl = col->find("half_length");
+    auto* r  = col->find("radius");
+    if (!hl || hl->kind != jval::kind_t::num_t) return false;
+    if (!r  || r->kind  != jval::kind_t::num_t) return false;
+    out_half_length = float(hl->n);
+    out_radius      = float(r->n);
+    return true;
+}
+
+// Analytic rotational wind: read the per-mesh `_RYNX_BONE` skeleton bone table.
+// `mesh_obj` is root.meshes[mesh_index]; the extension is
+// `{"bones": <bufferViewId>, "count": <N>}` and the bufferView is N*8 LE
+// float32 (8 floats/bone, node-index order: [parent_index_f, depth_f,
+// pivot.xyz, node_pos.xyz]). On success fills `out_table` (size N*8) +
+// `out_count` (N) and returns true; on absence/malformed returns false and
+// clears outputs. `root` resolves the bufferView; `bin`/`bin_len` is the BIN.
+inline bool read_rynx_bone_table(const jval& root, const jval& mesh_obj,
+                                 const char* bin, size_t bin_len,
+                                 std::vector<float>& out_table,
+                                 uint32_t& out_count) {
+    out_table.clear();
+    out_count = 0;
+    auto* exts = mesh_obj.find("extensions");
+    if (!exts) return false;
+    auto* bone = exts->find("_RYNX_BONE");
+    if (!bone) return false;
+    auto* bones_node = bone->find("bones");
+    auto* count_node = bone->find("count");
+    if (!bones_node || !count_node) return false;
+    int bv_idx = bones_node->as_int(-1);
+    uint32_t count = uint32_t(count_node->as_int(0));
+    if (bv_idx < 0 || count == 0) return false;
+
+    auto* buffer_views = root.find("bufferViews");
+    if (!buffer_views || bv_idx >= int(buffer_views->as_arr().size())) return false;
+    const jval& bv = buffer_views->as_arr()[bv_idx];
+    uint32_t off = uint32_t(bv.find("byteOffset") ? bv.find("byteOffset")->as_int() : 0);
+    uint32_t len = uint32_t(bv.find("byteLength") ? bv.find("byteLength")->as_int() : 0);
+
+    const size_t need_floats = size_t(count) * 8u;
+    if (len < need_floats * sizeof(float)) return false;
+    if (size_t(off) + need_floats * sizeof(float) > bin_len) return false;
+
+    out_table.resize(need_floats);
+    for (size_t i = 0; i < need_floats; ++i) {
+        float v;
+        std::memcpy(&v, bin + off + i * sizeof(float), sizeof(float));
+        out_table[i] = v;
+    }
+    out_count = count;
+    return true;
 }
 
 // Thin wrapper: parse all primitives, return the first. Preserves the C1

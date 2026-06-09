@@ -502,7 +502,12 @@ namespace treegen {
             rgba[i * 4 + 3] = 255;
         }
 
-        constexpr float k_normal_strength = 8.0f;
+        // Vein normal perturbation. 8.0 tilted vein-edge normals up to ~83° off
+        // the leaf surface — physically absurd for a leaf, and the steep facets
+        // aliased the (diffuse) sun/omni N·L into a high-frequency speckle that
+        // travelled across the leaf under camera/wind motion, reading as a
+        // "metallic glimmer". 2.0 keeps the veins legible with gentle relief.
+        constexpr float k_normal_strength = 2.0f;
 
         for (LeafShape sp : k_species_in_atlas) {
             const LeafShapeMesh mesh = shape_mesh_for(sp);

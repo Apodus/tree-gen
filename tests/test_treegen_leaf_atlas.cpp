@@ -677,10 +677,11 @@ TEST_CASE("[treegen_leaf_atlas_p3] roughness atlas dims and MR layout",
         const double mean_rough = rough_sum / count;
         INFO("species=" << k_species_name[si]
              << " roughness G mean=" << mean_rough << " count=" << count);
-        // Non-vein pixels: roughness ~0.35; vein pixels ~0.80.
-        // Mean should be near 0.35 since veins are a small fraction.
-        REQUIRE(mean_rough >= 0.30);
-        REQUIRE(mean_rough <= 0.60);
+        // PBR C1 B4 — leaves matte: roughness = 0.70 + 0.15*vein_factor
+        // (range 0.70-0.85). Mean sits near 0.70 since veins are a small
+        // fraction; bounds bracket the matte band.
+        REQUIRE(mean_rough >= 0.65);
+        REQUIRE(mean_rough <= 0.90);
     }
 }
 

@@ -432,7 +432,8 @@ namespace treegen {
                                          const uint8_t* strip_alpha) {
             const int x0 = K_NEEDLE_STRIP_CELL_COL * K_LEAF_CELL_PX;
             const int y0 = K_NEEDLE_STRIP_CELL_ROW * K_LEAF_CELL_PX;
-            constexpr uint8_t rough_byte = static_cast<uint8_t>(0.50f * 255.0f + 0.5f); // 128
+            // PBR C1 B4 — needles are matte like leaves (~0.70).
+            constexpr uint8_t rough_byte = static_cast<uint8_t>(0.70f * 255.0f + 0.5f); // 179
 
             for (int y = 0; y < K_LEAF_CELL_PX; ++y) {
                 for (int x = 0; x < K_LEAF_CELL_PX; ++x) {
@@ -643,16 +644,16 @@ namespace treegen {
     }
 
     std::vector<uint8_t> encode_leaf_roughness_png(uint64_t /*seed*/) {
-        // C3 P2: per-leaf roughness atlas, glTF metallic-roughness layout.
+        // PBR C1 B4: per-leaf roughness atlas, glTF metallic-roughness layout.
         // R=255 (unused), G=roughness (LINEAR byte), B=0 (metallic=0), A=255.
-        // Leaf center smooth (0.35), vein ridges rough (0.80).
-        // Formula: roughness = 0.35 + 0.45 * vein_factor.
+        // Leaves are matte — keep a subtle vein gradient but stay rough.
+        // Formula: roughness = 0.70 + 0.15 * vein_factor (range 0.70-0.85).
         std::vector<uint8_t> rgba(
             static_cast<size_t>(K_LEAF_ATLAS_PX) * K_LEAF_ATLAS_PX * 4, 0);
-        // Fill default: R=255, G=128 (0.5 roughness), B=0 (metal=0), A=255.
+        // Fill default: R=255, G=179 (~0.70 roughness), B=0 (metal=0), A=255.
         for (size_t i = 0; i < static_cast<size_t>(K_LEAF_ATLAS_PX) * K_LEAF_ATLAS_PX; ++i) {
             rgba[i * 4 + 0] = 255;
-            rgba[i * 4 + 1] = 128;
+            rgba[i * 4 + 1] = 179;
             rgba[i * 4 + 3] = 255;
         }
 
@@ -680,7 +681,7 @@ namespace treegen {
                     if (alpha[ci] == 0) continue;
 
                     const float vein_factor = static_cast<float>(vein_height[ci]) / 255.0f;
-                    const float roughness = 0.35f + 0.45f * vein_factor;
+                    const float roughness = 0.70f + 0.15f * vein_factor;
                     const uint8_t rough_byte = static_cast<uint8_t>(std::max(0.0f, std::min(255.0f,
                                                roughness * 255.0f + 0.5f)));
 

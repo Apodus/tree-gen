@@ -51,6 +51,7 @@ int budget_for_lod(const LodBudget& b, int lod_index) {
 }
 
 LodOutput emit_one_bark_lod(const TreeSkeleton&    skel,
+                            const BoneTable&       rig,
                             const BarkMeshOptions& base_opts,
                             const LodBudget&       budget,
                             float                  tree_height_m,
@@ -76,20 +77,24 @@ LodOutput emit_one_bark_lod(const TreeSkeleton&    skel,
     BarkMeshOutput bark = build_bark_mesh(skel, opts);
 
     LodOutput lod;
-    // C8-wind P1 — bark bone binding: host node (u16) + parent-blend byte.
+    // Bark bone binding against the decimated rig: host = run bone of the
+    // vertex's original node; blend = run-arc parent blend. The mesher's old
+    // per-internode blend byte encodes the INTRA-segment axial fraction
+    // (255 at the parent end, 0 at the node end) — recover t_seg from it so
+    // the run blend interpolates at vertex (not just node) granularity.
     // Build before the move so bark.per_vertex_node_index is still populated.
     lod.bark_bone_index.reserve(bark.per_vertex_node_index.size());
-    for (int n : bark.per_vertex_node_index) {
-        lod.bark_bone_index.push_back(static_cast<uint16_t>(n));
+    lod.bark_bone_blend.reserve(bark.per_vertex_node_index.size());
+    constexpr float inv255 = 1.0f / 255.0f;
+    for (size_t v = 0; v < bark.per_vertex_node_index.size(); ++v) {
+        const int   n     = bark.per_vertex_node_index[v];
+        const float t_seg = 1.0f - static_cast<float>(bark.bone_blend[v]) * inv255;
+        lod.bark_bone_index.push_back(rig.node_to_bone[static_cast<size_t>(n)]);
+        lod.bark_bone_blend.push_back(rig.vertex_parent_blend(n, t_seg));
     }
-    lod.bark_bone_blend     = std::move(bark.bone_blend);
-    // Full-skeleton bone table — identical for every LOD (no per-LOD bone
-    // decimation in this campaign; every vertex binds to its full-skeleton node).
-    {
-        BoneTable bt = build_bone_table(skel);
-        lod.bone_table_records = std::move(bt.records);
-        lod.bone_count         = bt.bone_count;
-    }
+    // Decimated bone table — identical for every LOD (built once by caller).
+    lod.bone_table_records = rig.records;
+    lod.bone_count         = rig.bone_count;
     lod.mesh                = std::move(bark.mesh);
     lod.indices_u32         = std::move(bark.indices_u32);
     lod.wind_weights_packed = std::move(bark.wind_weights_packed);
@@ -161,6 +166,28 @@ LodOutput emit_billboard_stub_lod(float tree_height_m) {
     return lod;
 }
 
+// Leaf binding against the decimated rig. leaf_out.bone_index arrives holding
+// ORIGINAL skeleton node ids; rebind to run bones, derive the run blend at the
+// attachment point (t_seg = 1), and pin the tumble pivot to the original host
+// node position so cards keep hanging from their twig, not from the (possibly
+// distant) surviving joint.
+void bind_leaves_to_rig(LodOutput& lod, const LeafMeshOutput& leaf_out,
+                        const TreeSkeleton& skel, const BoneTable& rig) {
+    const size_t n = leaf_out.bone_index.size();
+    lod.leaf_bone_index.resize(n);
+    lod.leaf_bone_blend.resize(n);
+    lod.leaf_pivots.reserve(n * 3);
+    for (size_t v = 0; v < n; ++v) {
+        const int h = leaf_out.bone_index[v];
+        lod.leaf_bone_index[v] = rig.node_to_bone[static_cast<size_t>(h)];
+        lod.leaf_bone_blend[v] = rig.vertex_parent_blend(h, 1.0f);
+        const vec3 p = skel.nodes[static_cast<size_t>(h)].position;
+        lod.leaf_pivots.push_back(p.x);
+        lod.leaf_pivots.push_back(p.y);
+        lod.leaf_pivots.push_back(p.z);
+    }
+}
+
 } // anonymous namespace
 
 std::vector<LodOutput> emit_all_lods(const TreeSkeleton&    skel,
@@ -169,10 +196,11 @@ std::vector<LodOutput> emit_all_lods(const TreeSkeleton&    skel,
                                      float                  tree_height_m,
                                      uint64_t               /*seed_effective*/)
 {
+    const BoneTable rig = build_bone_table(skel);
     std::vector<LodOutput> out;
     out.reserve(3);
     for (int i = 0; i < 3; ++i) {
-        out.push_back(emit_one_bark_lod(skel, base_opts, budget, tree_height_m, i));
+        out.push_back(emit_one_bark_lod(skel, rig, base_opts, budget, tree_height_m, i));
     }
     // L3 billboard stub suppressed (C10).
     return out;
@@ -200,11 +228,12 @@ std::vector<LodOutput> emit_all_lods(const TreeSkeleton&            skel,
                                               seed_effective);
     }
 
+    const BoneTable rig = build_bone_table(skel);
     std::vector<LodOutput> out;
     out.reserve(3);
 
     for (int i = 0; i < 3; ++i) {
-        LodOutput lod = emit_one_bark_lod(skel, bark_opts, bark_budget, tree_height_m, i);
+        LodOutput lod = emit_one_bark_lod(skel, rig, bark_opts, bark_budget, tree_height_m, i);
 
         if (is_strip) {
             // Segment-based strip emission. LOD controls strip_radius_threshold:
@@ -236,10 +265,7 @@ std::vector<LodOutput> emit_all_lods(const TreeSkeleton&            skel,
             LeafMeshOutput leaf_out = build_branch_strip_mesh(skel, strip_opts, min_depth, threshold);
 
             if (!leaf_out.positions.empty()) {
-                // C8-wind P1 — leaves/strips are rigid: bone_index from emitter,
-                // bone_blend all-zero (full host rotation, no parent blend).
-                lod.leaf_bone_index            = std::move(leaf_out.bone_index);
-                lod.leaf_bone_blend.assign(lod.leaf_bone_index.size(), 0u);
+                bind_leaves_to_rig(lod, leaf_out, skel, rig);
                 lod.leaf_positions             = std::move(leaf_out.positions);
                 lod.leaf_normals               = std::move(leaf_out.normals);
                 lod.leaf_uvs                   = std::move(leaf_out.uvs);
@@ -264,9 +290,7 @@ std::vector<LodOutput> emit_all_lods(const TreeSkeleton&            skel,
                 leaf_opts.leaf_size_m           *= k_lod_leaf_scale[i];  // C3-LOD-quality
                 LeafMeshOutput leaf_out = build_leaf_mesh(kept_sites, leaf_opts);
 
-                // C8-wind P1 — rigid leaf binding (see strip path above).
-                lod.leaf_bone_index            = std::move(leaf_out.bone_index);
-                lod.leaf_bone_blend.assign(lod.leaf_bone_index.size(), 0u);
+                bind_leaves_to_rig(lod, leaf_out, skel, rig);
                 lod.leaf_positions             = std::move(leaf_out.positions);
                 lod.leaf_normals               = std::move(leaf_out.normals);
                 lod.leaf_uvs                   = std::move(leaf_out.uvs);

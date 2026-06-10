@@ -505,11 +505,14 @@ int main(int argc, char** argv) {
                         leaf_prim.wind_weights_packed = std::span<const uint8_t>(
                             lod.leaf_wind_weights_packed.data(),
                             lod.leaf_wind_weights_packed.size());
-                        // C8-wind P1 — leaf _RYNX_BONE binding (rigid, blend=0).
+                        // Leaf _RYNX_BONE binding: decimated-rig bone + run
+                        // blend + per-vertex rest attachment pivot (tumble).
                         leaf_prim.bone_index = std::span<const uint16_t>(
                             lod.leaf_bone_index.data(), lod.leaf_bone_index.size());
                         leaf_prim.bone_blend = std::span<const uint8_t>(
                             lod.leaf_bone_blend.data(), lod.leaf_bone_blend.size());
+                        leaf_prim.bone_pivot = std::span<const float>(
+                            lod.leaf_pivots.data(), lod.leaf_pivots.size());
                         leaf_prim.material.alpha_mode   = "MASK";
                         leaf_prim.material.alpha_cutoff = 0.5f;
                         leaf_prim.material.base_color_tex_index         = 4;
@@ -526,7 +529,7 @@ int main(int argc, char** argv) {
                     md.lod_index             = lod.lod_index;
                     md.lod_max_distance_m    = lod.lod_max_distance_m;
                     md.lod_screen_height_px  = lod.lod_screen_height_px;
-                    // C8-wind P1 — full-skeleton bone table for this LOD.
+                    // Decimated bone table for this LOD (identical per LOD).
                     md.bone_table            = std::span<const float>(
                         lod.bone_table_records.data(), lod.bone_table_records.size());
                     md.bone_count            = lod.bone_count;

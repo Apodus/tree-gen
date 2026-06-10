@@ -15,6 +15,8 @@
 // (treegen.sharpmake.cs enforces).
 #pragma once
 
+#include "bone_table.hpp"  // K_FLOATS_PER_BONE (the _RYNX_BONE record stride)
+
 #include <cassert>
 #include <cmath>
 #include <cstdint>
@@ -63,12 +65,16 @@ struct PrimitiveData {
     // C2 P2: `_RYNX_WIND` per-vertex 4-tier influences. Empty span = no extension
     // for this primitive. Length must equal positions.size()/3 * 4.
     std::span<const uint8_t>  wind_weights_packed;
-    // C8-wind P1: `_RYNX_BONE` per-vertex rotational-wind binding. bone_index =
-    // host skeleton node per vertex (SCALAR u16); bone_blend = parent-blend per
-    // vertex (SCALAR u8 normalized, 2-bone LBS). Both empty = no bone binding
-    // for this primitive. When present, each must have length == vcount.
+    // `_RYNX_BONE` per-vertex rotational-wind binding. bone_index = host
+    // DECIMATED-rig bone per vertex (SCALAR u16); bone_blend = run-arc
+    // parent-blend per vertex (SCALAR u8 normalized, 2-bone LBS). Both empty
+    // = no bone binding for this primitive; when present, each must have
+    // length == vcount. bone_pivot (optional, leaf primitives only) =
+    // per-vertex rest attachment point (VEC3 float, length vcount*3) — the
+    // leaf tumble pivot; requires the index/blend pair.
     std::span<const uint16_t> bone_index;
     std::span<const uint8_t>  bone_blend;
+    std::span<const float>    bone_pivot;
     MaterialSpec              material;
 };
 
@@ -83,10 +89,11 @@ struct MeshData {
     // _RYNX_COLLISION capsule (mesh[0] only). negative half_length = not set.
     float collision_half_length = -1.0f;
     float collision_radius      = 0.0f;
-    // C8-wind P1 — `_RYNX_BONE` skeleton bone table for this mesh: 8 floats/bone
-    // (see bone_table.hpp). Emitted as a target=0 bufferView + a mesh-level
-    // extension `_RYNX_BONE = {"bones": <bufferView>, "count": <bone_count>}`.
-    // Empty span / bone_count == 0 = no bone table for this mesh.
+    // `_RYNX_BONE` decimated bone table for this mesh: K_FLOATS_PER_BONE (12)
+    // floats/bone (see bone_table.hpp). Emitted as a target=0 bufferView + a
+    // mesh-level extension `_RYNX_BONE = {"bones": <bufferView>, "count":
+    // <bone_count>, "floats_per_bone": 12}`. Empty span / bone_count == 0 =
+    // no bone table for this mesh.
     std::span<const float> bone_table;
     uint32_t               bone_count = 0;
 };
@@ -157,8 +164,9 @@ struct PrimitiveAccessors {
     int tangents_acc;       // C1 P6: -1 if absent
     int indices_acc;
     int wind_weights_acc;   // -1 if absent
-    int bone_index_acc;     // C8-wind P1: -1 if absent
-    int bone_blend_acc;     // C8-wind P1: -1 if absent
+    int bone_index_acc;     // -1 if absent
+    int bone_blend_acc;     // -1 if absent
+    int bone_pivot_acc;     // -1 if absent (leaf tumble pivot stream)
     bool material_emit;     // always true for now (one material per primitive)
 };
 
@@ -543,6 +551,10 @@ inline std::string build_json_multi_mesh(
                     j += i2s(pa.bone_index_acc);
                     j += R"(,"blend":)";
                     j += i2s(pa.bone_blend_acc);
+                    if (pa.bone_pivot_acc >= 0) {
+                        j += R"(,"pivot":)";
+                        j += i2s(pa.bone_pivot_acc);
+                    }
                     j += '}';
                     first_pext = false;
                 }
@@ -569,6 +581,8 @@ inline std::string build_json_multi_mesh(
                 j += i2s(mm.bone_table_bv);
                 j += R"(,"count":)";
                 j += i2s(mm.bone_count);
+                j += R"(,"floats_per_bone":)";
+                j += i2s(K_FLOATS_PER_BONE);
                 j += '}';
                 first_ext = false;
             }
@@ -946,6 +960,7 @@ inline bool write_glb_multi_mesh(std::span<const MeshData> meshes,
         bool     has_tangents;
         bool     has_wind;
         bool     has_bone;
+        bool     has_pivot;
     };
     std::vector<PrimResolved> resolved;
     std::vector<glb_detail::MeshJsonMeta> meshes_meta;
@@ -966,10 +981,10 @@ inline bool write_glb_multi_mesh(std::span<const MeshData> meshes,
         meta.collision_radius        = mm.collision_radius;
         if (mm.lod_index >= 0) any_lod = true;
         if (mm.collision_half_length >= 0.0f) any_collision = true;
-        // C8-wind P1 — bone table presence (bufferView filled during BIN layout).
+        // Bone table presence (bufferView filled during BIN layout).
         if (!mm.bone_table.empty() && mm.bone_count > 0) {
-            if (mm.bone_table.size() != size_t(mm.bone_count) * 8u) {
-                set_err("write_glb_multi_mesh: bone_table length must equal bone_count*8");
+            if (mm.bone_table.size() != size_t(mm.bone_count) * size_t(K_FLOATS_PER_BONE)) {
+                set_err("write_glb_multi_mesh: bone_table length must equal bone_count*K_FLOATS_PER_BONE");
                 return false;
             }
             meta.bone_count = static_cast<int>(mm.bone_count);
@@ -1027,6 +1042,16 @@ inline bool write_glb_multi_mesh(std::span<const MeshData> meshes,
                 }
                 any_bone = true;
             }
+            if (!p.bone_pivot.empty()) {
+                if (!prim_has_bone) {
+                    set_err("write_glb_multi_mesh: bone_pivot requires bone_index/bone_blend");
+                    return false;
+                }
+                if (p.bone_pivot.size() != size_t(vcount) * 3) {
+                    set_err("write_glb_multi_mesh: bone_pivot length must equal vcount*3");
+                    return false;
+                }
+            }
             PrimResolved r;
             r.src = &p;
             r.vcount = vcount;
@@ -1036,6 +1061,7 @@ inline bool write_glb_multi_mesh(std::span<const MeshData> meshes,
             r.has_tangents = !p.tangents.empty();
             r.has_wind = !p.wind_weights_packed.empty();
             r.has_bone = prim_has_bone;
+            r.has_pivot = prim_has_bone && !p.bone_pivot.empty();
             resolved.push_back(r);
         }
     }
@@ -1082,6 +1108,7 @@ inline bool write_glb_multi_mesh(std::span<const MeshData> meshes,
         pa.wind_weights_acc = -1;
         pa.bone_index_acc = -1;
         pa.bone_blend_acc = -1;
+        pa.bone_pivot_acc = -1;
 
         double pmn[3] = { 1e300, 1e300, 1e300 };
         double pmx[3] = { -1e300, -1e300, -1e300 };
@@ -1183,6 +1210,17 @@ inline bool write_glb_multi_mesh(std::span<const MeshData> meshes,
             ab.normalized = true;
             accs.push_back(ab);
             pa.bone_blend_acc = static_cast<int>(accs.size() - 1);
+
+            // Optional leaf tumble pivot stream: VEC3 float (5126).
+            if (r.has_pivot) {
+                int bp_bv = add_bv(static_cast<int>(r.vcount * 3 * sizeof(float)), 34962);
+                glb_detail::append_bytes(bin, p.bone_pivot.data(), p.bone_pivot.size() * sizeof(float));
+                glb_detail::AccessorMeta ap{};
+                ap.bufferView = bp_bv; ap.byteOffset = 0; ap.componentType = 5126; // FLOAT
+                ap.count = static_cast<int>(r.vcount); ap.type = "VEC3";
+                accs.push_back(ap);
+                pa.bone_pivot_acc = static_cast<int>(accs.size() - 1);
+            }
         }
 
         prim_accs.push_back(pa);

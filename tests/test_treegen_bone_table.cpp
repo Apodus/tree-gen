@@ -59,6 +59,8 @@ ts::TreeSkeleton grow_oak() {
 //   node 10 forks:
 //     branch A: 11..16 (+x, 0.5 m, depth 1) + tail node 21 off 16 (0.5 m)
 //     branch B: 17..20 (-x, 0.5 m, depth 1) — 2.0 m, below subdivision
+//   node 1 forks (0.5 m from root — under min_fork_spacing → DROPPED):
+//     side branch: 22, 23 (+x at z=0.5, depth 1) — rides the trunk run.
 ts::TreeSkeleton synthetic_skel() {
     ts::TreeSkeleton s;
     auto add = [&](int parent, ts::vec3 pos, int depth) {
@@ -76,6 +78,8 @@ ts::TreeSkeleton synthetic_skel() {
     int b = 10;
     for (int i = 0; i < 4; ++i) b = add(b, {-0.5f * (i + 1), 0, 5.0f}, 1);       // 17..20
     add(16, {3.5f, 0, 5.0f}, 1);                                 // 21 tail
+    int sb = add(1, {0.5f, 0, 0.5f}, 1);                         // 22 (dropped-fork side)
+    add(sb, {1.0f, 0, 0.5f}, 1);                                 // 23
     return s;
 }
 
@@ -256,7 +260,9 @@ TEST_CASE("[treegen_bone_table] decimated rig: exact structure on synthetic skel
     const ts::BoneTable bt = ts::build_bone_table(skel, params);
 
     // Kept set: root 0; trunk subdivision 4 + 7 (5.0 m run, 2 joints);
-    // fork 10; branch-A subdivision 14 (3.3 m run). Branch B (2.0 m) and the
+    // fork 10 (5.0 m >= min_fork_spacing); branch-A subdivision 14 (3.5 m
+    // run). The fork at node 1 (0.5 m < min_fork_spacing) is DROPPED — its
+    // side branch (22,23) rides the trunk run. Branch B (2.0 m) and the
     // tails (15,16,21) stay rigid.
     REQUIRE(bt.bone_count == 5u);
     REQUIRE(bt.records.size() == 5u * kStride);
@@ -299,15 +305,25 @@ TEST_CASE("[treegen_bone_table] decimated rig: exact structure on synthetic skel
     REQUIRE(bt.vertex_parent_blend(1, 0.0f) == 255u);
     // Kept node at its own ring: pure host.
     REQUIRE(bt.vertex_parent_blend(4, 1.0f) == 0u);
-    // Rigid riders: branch B + branch-A tail ride their kept ancestor whole.
+    // Rigid riders: branch B + branch-A tail ride their kept ancestor whole
+    // (parent is a kept joint → constant blend 0 across the whole rider).
     for (int n : {17, 18, 19, 20}) {
         REQUIRE(bt.node_to_bone[static_cast<size_t>(n)] == 3u);
-        REQUIRE(bt.node_in_run[static_cast<size_t>(n)] == 0u);
-        REQUIRE(bt.vertex_parent_blend(n, 0.5f) == 0u);
+        REQUIRE(bt.vertex_parent_blend(n, 0.0f) == 0u);
+        REQUIRE(bt.vertex_parent_blend(n, 1.0f) == 0u);
     }
     for (int n : {15, 16, 21}) {
         REQUIRE(bt.node_to_bone[static_cast<size_t>(n)] == 4u);
-        REQUIRE(bt.node_in_run[static_cast<size_t>(n)] == 0u);
+        REQUIRE(bt.vertex_parent_blend(n, 0.5f) == 0u);
+    }
+    // Dropped-fork side branch (22,23): rides the trunk run at its
+    // attachment point — bone 1 (node 4's run) at node 1's CONSTANT blend
+    // (t = 0.25 → blend = 191). No kink at the attach, no over-bend.
+    for (int n : {22, 23}) {
+        REQUIRE(bt.node_to_bone[static_cast<size_t>(n)] == 1u);
+        REQUIRE(bt.node_run_t[static_cast<size_t>(n)] == Approx(0.25f));
+        REQUIRE(bt.vertex_parent_blend(n, 0.0f) == 191u);
+        REQUIRE(bt.vertex_parent_blend(n, 1.0f) == 191u);
     }
 
     // Compliance conservation at every kept node: decimated chain sums equal
@@ -364,7 +380,10 @@ TEST_CASE("[treegen_bone_table] decimated rig on oak: shape, conservation, chain
         chain_depth[b] = chain_depth[static_cast<size_t>(parent)] + 1;
         if (chain_depth[b] > max_chain) max_chain = chain_depth[b];
     }
-    REQUIRE(max_chain + 1 <= 16);
+    // Strict margin under the shader's MAX_BONE_DEPTH (16): the cap must be
+    // a degenerate-data guard, never load-bearing. min_fork_spacing_m is the
+    // knob that enforces this; 12 leaves room for taller species.
+    REQUIRE(max_chain + 1 <= 12);
     WARN("oak max FK chain length: " << (max_chain + 1));
 
     // Compliance conservation for EVERY kept bone (records hold its node via

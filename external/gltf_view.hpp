@@ -370,13 +370,16 @@ struct cpu_mesh {
     // carry the extension.
     std::vector<uint8_t> wind_weights_packed;
 
-    // C2 analytic rotational wind: `_RYNX_BONE` per-vertex binding. bone_index
-    // = host skeleton-node index (SCALAR UNSIGNED_SHORT, 1/vert); bone_blend =
-    // parent-blend weight (SCALAR UNSIGNED_BYTE normalized, 1/vert). Both empty
-    // when the primitive lacks the extension. Resolved against the per-mesh
-    // bone table (see read_rynx_bone_table).
+    // Decimated wind rig: `_RYNX_BONE` per-vertex binding. bone_index = host
+    // bone index in the decimated rig (SCALAR UNSIGNED_SHORT, 1/vert);
+    // bone_blend = run-arc parent-blend weight (SCALAR UNSIGNED_BYTE
+    // normalized, 1/vert); bone_pivot = optional leaf tumble pivot (VEC3
+    // FLOAT, 3/vert — leaf primitives only). Empty when the primitive lacks
+    // the extension / the pivot stream. Resolved against the per-mesh bone
+    // table (see read_rynx_bone_table).
     std::vector<uint16_t> bone_index;
     std::vector<uint8_t>  bone_blend;
+    std::vector<float>    bone_pivot;
 };
 
 // Per-primitive material descriptor harvested from glTF 2.0 PBR material
@@ -392,6 +395,10 @@ struct pbr_material_desc {
     float alpha_cutoff    = 0.5f;
     bool  double_sided    = false;
     float base_color_factor[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+    // pbrMetallicRoughness scalar factors (spec default 1.0). Multiply the MR
+    // texture's roughness/metallic channels; passthrough when 1.0.
+    float roughness_factor = 1.0f;
+    float metallic_factor  = 1.0f;
 };
 
 inline bool read_vec3_accessor(const accessor& acc, const char* bin, size_t bin_len, std::vector<float>& out) {
@@ -555,6 +562,7 @@ inline bool extract_one_primitive(const jval& root, const jval& prim, const glb_
     out.wind_weights_packed.clear();
     out.bone_index.clear();
     out.bone_blend.clear();
+    out.bone_pivot.clear();
     out.material_index = -1;
 
     if (!read_vec3_accessor(pos_acc, glb.bin_begin, glb.bin_len, out.positions)) {
@@ -616,9 +624,10 @@ inline bool extract_one_primitive(const jval& root, const jval& prim, const glb_
             }
         }
 
-        // Analytic rotational wind: `_RYNX_BONE` per-vertex binding. `.index`
-        // is SCALAR UNSIGNED_SHORT (host bone), `.blend` is SCALAR UNSIGNED_BYTE
-        // normalized (parent-blend). Both required and both must match vertex
+        // Decimated wind rig: `_RYNX_BONE` per-vertex binding. `.index` is
+        // SCALAR UNSIGNED_SHORT (host bone), `.blend` is SCALAR UNSIGNED_BYTE
+        // normalized (run-arc parent-blend); `.pivot` is an OPTIONAL VEC3
+        // FLOAT leaf tumble pivot. index+blend required and must match vertex
         // count — drop the whole binding on any mismatch (atomic, no partials).
         if (auto* bone = exts->find("_RYNX_BONE")) {
             const size_t vcount = out.positions.size() / 3;
@@ -635,6 +644,20 @@ inline bool extract_one_primitive(const jval& root, const jval& prim, const glb_
                     if (out.bone_index.size() != vcount || out.bone_blend.size() != vcount) {
                         out.bone_index.clear();
                         out.bone_blend.clear();
+                    }
+                }
+            }
+            if (!out.bone_index.empty()) {
+                auto* piv_node = bone->find("pivot");
+                int piv_acc_i = piv_node ? piv_node->as_int(-1) : -1;
+                if (piv_acc_i >= 0) {
+                    accessor pacc;
+                    if (resolve_accessor(root, piv_acc_i, pacc) &&
+                        pacc.component_type == GLTF_FLOAT) {
+                        (void)read_vec3_accessor(pacc, glb.bin_begin, glb.bin_len, out.bone_pivot);
+                        if (out.bone_pivot.size() != vcount * 3) {
+                            out.bone_pivot.clear();
+                        }
                     }
                 }
             }
@@ -760,17 +783,20 @@ inline bool extract_collision_capsule(const jval& mesh_obj,
     return true;
 }
 
-// Analytic rotational wind: read the per-mesh `_RYNX_BONE` skeleton bone table.
-// `mesh_obj` is root.meshes[mesh_index]; the extension is
-// `{"bones": <bufferViewId>, "count": <N>}` and the bufferView is N*8 LE
-// float32 (8 floats/bone, node-index order: [parent_index_f, depth_f,
-// pivot.xyz, node_pos.xyz]). On success fills `out_table` (size N*8) +
-// `out_count` (N) and returns true; on absence/malformed returns false and
-// clears outputs. `root` resolves the bufferView; `bin`/`bin_len` is the BIN.
+// Decimated wind rig: read the per-mesh `_RYNX_BONE` bone table. `mesh_obj`
+// is root.meshes[mesh_index]; the extension is `{"bones": <bufferViewId>,
+// "count": <N>, "floats_per_bone": 12}` and the bufferView is N*12 LE float32
+// (12 floats/bone, 3 vec4s: [parent_f, n_collapsed, sum_depth, 0, pivot.xyz,
+// 0, node_pos.xyz, 0]). On success fills `out_table` (size N*12) +
+// `out_count` (N) and returns true; on absence/malformed/foreign-stride
+// returns false and clears outputs. Pre-decimation GLBs (implicit stride 8)
+// are rejected here — the old 1:1 rig's record format and bone ids are
+// incompatible, so the mesh falls back to no-bone (static) rendering.
 inline bool read_rynx_bone_table(const jval& root, const jval& mesh_obj,
                                  const char* bin, size_t bin_len,
                                  std::vector<float>& out_table,
                                  uint32_t& out_count) {
+    constexpr uint32_t k_floats_per_bone = 12;
     out_table.clear();
     out_count = 0;
     auto* exts = mesh_obj.find("extensions");
@@ -779,7 +805,9 @@ inline bool read_rynx_bone_table(const jval& root, const jval& mesh_obj,
     if (!bone) return false;
     auto* bones_node = bone->find("bones");
     auto* count_node = bone->find("count");
+    auto* fpb_node   = bone->find("floats_per_bone");
     if (!bones_node || !count_node) return false;
+    if (!fpb_node || uint32_t(fpb_node->as_int(0)) != k_floats_per_bone) return false;
     int bv_idx = bones_node->as_int(-1);
     uint32_t count = uint32_t(count_node->as_int(0));
     if (bv_idx < 0 || count == 0) return false;
@@ -790,7 +818,7 @@ inline bool read_rynx_bone_table(const jval& root, const jval& mesh_obj,
     uint32_t off = uint32_t(bv.find("byteOffset") ? bv.find("byteOffset")->as_int() : 0);
     uint32_t len = uint32_t(bv.find("byteLength") ? bv.find("byteLength")->as_int() : 0);
 
-    const size_t need_floats = size_t(count) * 8u;
+    const size_t need_floats = size_t(count) * size_t(k_floats_per_bone);
     if (len < need_floats * sizeof(float)) return false;
     if (size_t(off) + need_floats * sizeof(float) > bin_len) return false;
 
@@ -844,6 +872,12 @@ inline bool extract_pbr_material(const jval& root, int mat_idx,
         }
         if (auto* mrt = pbr->find("metallicRoughnessTexture")) {
             out.metallic_roughness_tex = mrt->find("index") ? mrt->find("index")->as_int(-1) : -1;
+        }
+        if (auto* rf = pbr->find("roughnessFactor"); rf && rf->kind == jval::kind_t::num_t) {
+            out.roughness_factor = float(rf->n);
+        }
+        if (auto* mf = pbr->find("metallicFactor"); mf && mf->kind == jval::kind_t::num_t) {
+            out.metallic_factor = float(mf->n);
         }
     }
 

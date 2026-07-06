@@ -62,6 +62,30 @@ namespace treegen {
         };
     }
 
+    // C3 P1 — multi-leaf cluster-card cells live in row 2, one per species at
+    // the same column as its single-leaf cell (row 0). Each cell holds N baked
+    // leaves; a single ClusterCard samples the whole cell to read as a cluster.
+    inline constexpr int K_LEAF_CLUSTER_CELL_ROW = 2;
+    constexpr int leaf_cluster_cell_col(LeafShape s) { return leaf_atlas_cell_col(s); }
+
+    // Map cluster-card local coords ([-1, 1] half-extent, +Y apex) to the
+    // cluster cell's atlas UV. Mirror of `tile_uv` with the row pinned to the
+    // cluster row — the ClusterCard emitter and the cluster bake share this so
+    // per-vert UVs and the baked cell rectangle cannot drift apart.
+    constexpr vec2 cluster_tile_uv(LeafShape s, float lx, float ly) {
+        const int   col          = leaf_cluster_cell_col(s);
+        const float cell_size_uv = 1.0f / static_cast<float>(K_LEAF_ATLAS_DIM);
+        const float pad_uv       = static_cast<float>(K_LEAF_CELL_PAD_PX)
+                                 / static_cast<float>(K_LEAF_ATLAS_PX);
+        const float usable_uv    = cell_size_uv - 2.0f * pad_uv;
+        const float u_local      = 0.5f * (lx + 1.0f);
+        const float v_local      = 0.5f * (1.0f - ly);
+        return vec2{
+            static_cast<float>(col) * cell_size_uv + pad_uv + u_local * usable_uv,
+            static_cast<float>(K_LEAF_CLUSTER_CELL_ROW) * cell_size_uv + pad_uv + v_local * usable_uv,
+        };
+    }
+
     // Needle-strip atlas cell: row=1, col=1 (cell index 5).
     inline constexpr int K_NEEDLE_STRIP_CELL_ROW = 1;
     inline constexpr int K_NEEDLE_STRIP_CELL_COL = 1;

@@ -30,12 +30,13 @@ constexpr std::array<shape_entry, 5> k_shapes = {{
 }};
 
 struct leaf_geometry_entry { LeafGeometryType g; const char* name; };
-constexpr std::array<leaf_geometry_entry, 5> k_leaf_geometries = {{
+constexpr std::array<leaf_geometry_entry, 6> k_leaf_geometries = {{
     { LeafGeometryType::SingleCard,        "single_card"         },
     { LeafGeometryType::ProceduralVeined,  "procedural_veined"   },
     { LeafGeometryType::BentCard,          "bent_card"           },
     { LeafGeometryType::BentCrossCluster,  "bent_cross_cluster"  },
     { LeafGeometryType::BranchStrip,       "branch_strip"        },
+    { LeafGeometryType::ClusterCard,       "cluster_card"        },
 }};
 
 struct leaf_shape_entry { LeafShape s; const char* name; };
@@ -118,6 +119,7 @@ const char* leaf_geometry_type_to_string(LeafGeometryType g) {
         case LeafGeometryType::BentCard:          return "bent_card";
         case LeafGeometryType::BentCrossCluster:  return "bent_cross_cluster";
         case LeafGeometryType::BranchStrip:       return "branch_strip";
+        case LeafGeometryType::ClusterCard:       return "cluster_card";
     }
     throw std::runtime_error("tree_descriptor: leaf_geometry_type_to_string out-of-range enum");
 }

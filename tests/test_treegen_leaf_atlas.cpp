@@ -275,11 +275,13 @@ TEST_CASE("[treegen_leaf_atlas_p3] unused cells are transparent",
     auto d = decode_atlas(png);
 
     // Per P1 layout: row=0 cols=0..3 are used; needle-strip cell at row=1
-    // col=1. All other cells must be alpha=0 in every pixel.
+    // col=1; C3 P1 cluster cells at row=2 cols=0..3. All other cells must be
+    // alpha=0 in every pixel.
     for (int row = 0; row < tg::K_LEAF_ATLAS_DIM; ++row) {
         for (int col = 0; col < tg::K_LEAF_ATLAS_DIM; ++col) {
             if (row == 0 && col >= 0 && col <= 3) continue;
             if (row == tg::K_NEEDLE_STRIP_CELL_ROW && col == tg::K_NEEDLE_STRIP_CELL_COL) continue;
+            if (row == tg::K_LEAF_CLUSTER_CELL_ROW && col >= 0 && col <= 3) continue;
             const int x0 = col * tg::K_LEAF_CELL_PX;
             const int y0 = row * tg::K_LEAF_CELL_PX;
             for (int y = y0; y < y0 + tg::K_LEAF_CELL_PX; ++y) {
@@ -293,6 +295,62 @@ TEST_CASE("[treegen_leaf_atlas_p3] unused cells are transparent",
                 }
             }
         }
+    }
+}
+
+
+// ---- Test 5b (C3 P1): cluster cell holds MULTIPLE distinct sub-region leaves --
+// The whole point of ClusterCard is a multi-leaf texture. A single full-cell
+// leaf (what rasterize_leaf_alpha_into_cell would emit) = ONE connected
+// component filling the usable rect. The cluster bake stamps a jittered grid of
+// scaled sub-region leaves → many small, separated components. Assert ≥3
+// components AND that no single component spans the full cell (not a splat).
+TEST_CASE("[treegen_leaf_atlas_p3] cluster cell has multiple distinct leaves",
+          "[treegen][treegen_leaf_atlas_p3]") {
+    auto png = tg::encode_leaf_atlas_png(51u);
+    auto d = decode_atlas(png);
+
+    for (size_t si = 0; si < k_species.size(); ++si) {
+        const auto sp = k_species[si];
+        const int x0 = tg::leaf_cluster_cell_col(sp) * tg::K_LEAF_CELL_PX;
+        const int y0 = tg::K_LEAF_CLUSTER_CELL_ROW  * tg::K_LEAF_CELL_PX;
+        const int w = tg::K_LEAF_CELL_PX, h = tg::K_LEAF_CELL_PX;
+
+        std::vector<uint8_t> mark(static_cast<size_t>(w) * h, 0);
+        for (int y = 0; y < h; ++y)
+            for (int x = 0; x < w; ++x)
+                mark[y * w + x] = d.bytes[((y0 + y) * d.w + (x0 + x)) * 4 + 3] > 0 ? 1u : 0u;
+
+        int components = 0, max_comp_w = 0, max_comp_h = 0;
+        for (int y = 0; y < h; ++y) {
+            for (int x = 0; x < w; ++x) {
+                if (mark[y * w + x] != 1) continue;
+                ++components;
+                int minx = x, maxx = x, miny = y, maxy = y;
+                std::queue<std::pair<int,int>> q;
+                q.push({x, y}); mark[y * w + x] = 2;
+                while (!q.empty()) {
+                    auto [cx, cy] = q.front(); q.pop();
+                    minx = std::min(minx, cx); maxx = std::max(maxx, cx);
+                    miny = std::min(miny, cy); maxy = std::max(maxy, cy);
+                    constexpr int dx[4] = {-1, 1, 0, 0};
+                    constexpr int dy[4] = {0, 0, -1, 1};
+                    for (int k = 0; k < 4; ++k) {
+                        const int nx = cx + dx[k], ny = cy + dy[k];
+                        if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+                        if (mark[ny * w + nx] == 1) { mark[ny * w + nx] = 2; q.push({nx, ny}); }
+                    }
+                }
+                max_comp_w = std::max(max_comp_w, maxx - minx + 1);
+                max_comp_h = std::max(max_comp_h, maxy - miny + 1);
+            }
+        }
+        INFO("species=" << k_species_name[si] << " cluster components=" << components
+             << " max_comp=" << max_comp_w << "x" << max_comp_h);
+        // Multiple distinct leaves — not a single full-cell splat.
+        REQUIRE(components >= 3);
+        // No component spans the whole usable rect (a single leaf would).
+        REQUIRE(max_comp_w < (tg::K_LEAF_CELL_USABLE_PX * 3) / 4);
     }
 }
 

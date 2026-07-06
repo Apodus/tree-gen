@@ -6,6 +6,7 @@
 
 #include "test_support_paths.hpp"
 
+#include "../leaf_atlas.hpp"
 #include "../leaf_geometry.hpp"
 #include "../leaf_placement.hpp"
 #include "../leaf_shapes.hpp"
@@ -735,6 +736,51 @@ TEST_CASE("treegen_leaf_geometry: tris_per_leaf SoT matches emitter output",
         INFO("g=" << static_cast<int>(c.g) << " cluster=" << c.cluster
              << " sot=" << sot << " actual=" << actual_per_leaf);
         REQUIRE(actual_per_leaf == sot);
+    }
+}
+
+TEST_CASE("treegen_leaf_geometry: ClusterCard emits 6 verts / 4 tris, UVs in cluster cell",
+          "[treegen][treegen_leaf_geometry][treegen_leaf_geom_cluster_card]") {
+    const auto sites = make_synthetic_sites();
+    treegen::LeafMeshOptions opts;
+    opts.geometry_type   = treegen::LeafGeometryType::ClusterCard;
+    opts.shape           = treegen::LeafShape::OakLobed;
+    opts.leaf_size_m     = 0.12f;
+    opts.bend_half_angle = 0.392699081698724f;
+
+    auto out = treegen::build_leaf_mesh(sites, opts);
+
+    // Geometry: one bent card per site (6 verts / 4 tris).
+    REQUIRE(out.positions.size() / 3 == sites.size() * 6);
+    REQUIRE(out.indices.size()       == sites.size() * 12);
+    REQUIRE(out.uvs.size()       / 2 == sites.size() * 6);
+    REQUIRE(out.material_slots.size() == sites.size() * 6);
+
+    // SoT count helpers agree.
+    REQUIRE(treegen::verts_per_leaf(treegen::LeafGeometryType::ClusterCard,
+                                    treegen::LeafShape::OakLobed, 1) == 6);
+    REQUIRE(treegen::tris_per_leaf (treegen::LeafGeometryType::ClusterCard,
+                                    treegen::LeafShape::OakLobed, 1) == 4);
+
+    // Every UV lands inside the oak CLUSTER cell (row 2) usable rect — proving
+    // the card samples the multi-leaf cell, not the single-leaf cell (row 0).
+    constexpr float cell_size_uv = 1.0f / static_cast<float>(treegen::K_LEAF_ATLAS_DIM);
+    constexpr float pad_uv       = static_cast<float>(treegen::K_LEAF_CELL_PAD_PX)
+                                 / static_cast<float>(treegen::K_LEAF_ATLAS_PX);
+    constexpr float usable_uv    = cell_size_uv - 2.0f * pad_uv;
+    const float u0 = static_cast<float>(treegen::leaf_cluster_cell_col(treegen::LeafShape::OakLobed))
+                     * cell_size_uv + pad_uv;
+    const float v0 = static_cast<float>(treegen::K_LEAF_CLUSTER_CELL_ROW) * cell_size_uv + pad_uv;
+    const float u1 = u0 + usable_uv, v1 = v0 + usable_uv;
+    REQUIRE(v0 > 0.5f);   // row 2 → V in the lower half (not the row-0 leaf cell)
+    for (size_t i = 0; i < out.uvs.size() / 2; ++i) {
+        const float u = out.uvs[i * 2 + 0];
+        const float v = out.uvs[i * 2 + 1];
+        INFO("uv=(" << u << "," << v << ") rect u[" << u0 << "," << u1 << "] v[" << v0 << "," << v1 << "]");
+        REQUIRE(u >= u0 - 1e-6f);
+        REQUIRE(u <= u1 + 1e-6f);
+        REQUIRE(v >= v0 - 1e-6f);
+        REQUIRE(v <= v1 + 1e-6f);
     }
 }
 

@@ -85,6 +85,58 @@ namespace treegen {
             return alpha;
         }
 
+        // C3 P1 — multi-leaf cluster cell. Stamps a jittered 3×2 grid of
+        // scaled-down species leaves into a 256×256 cell via the per-triangle
+        // pixel-space rasterizer, so every leaf is a genuine SUB-REGION.
+        // (rasterize_leaf_alpha_into_cell takes NO transform → maps the shape to
+        // the WHOLE cell → N calls = a single full-cell leaf. Using the per-tri
+        // stamper is what makes the cell read as a CLUSTER of distinct leaves.)
+        // One leaf per grid slot, half-extent < half the slot so slots stay
+        // separated. Deterministic in `sp`.
+        constexpr uint64_t k_stream_cluster = 0xC3'01'03ULL;
+        constexpr int      k_cluster_grid_x = 3;
+        constexpr int      k_cluster_grid_y = 2;   // → 6 leaves per cluster cell
+
+        std::vector<uint8_t> bake_cluster_cell_alpha(LeafShape sp) {
+            const LeafShapeMesh mesh = shape_mesh_for(sp);
+            std::vector<uint8_t> alpha(static_cast<size_t>(K_LEAF_CELL_PX) * K_LEAF_CELL_PX, 0);
+
+            pcg32 rng;
+            rng.seed(static_cast<uint64_t>(sp), k_stream_cluster);
+
+            const float pad    = static_cast<float>(K_LEAF_CELL_PAD_PX);
+            const float usable = static_cast<float>(K_LEAF_CELL_USABLE_PX);
+            const float slot_w = usable / static_cast<float>(k_cluster_grid_x);
+            const float slot_h = usable / static_cast<float>(k_cluster_grid_y);
+            const float r_px   = 0.38f * std::min(slot_w, slot_h);
+            const size_t n_tris = mesh.tris.size() / 3;
+
+            for (int gy = 0; gy < k_cluster_grid_y; ++gy) {
+                for (int gx = 0; gx < k_cluster_grid_x; ++gx) {
+                    const float jx  = (rng.next_float_01() - 0.5f) * 0.16f * slot_w;
+                    const float jy  = (rng.next_float_01() - 0.5f) * 0.16f * slot_h;
+                    const float cx  = pad + (static_cast<float>(gx) + 0.5f) * slot_w + jx;
+                    const float cy  = pad + (static_cast<float>(gy) + 0.5f) * slot_h + jy;
+                    const float ang = rng.next_float_01() * 6.28318530717958647692f;
+                    const float ca  = std::cos(ang);
+                    const float sa  = std::sin(ang);
+                    auto xf = [&](vec2 v) -> vec2 {
+                        const float rx = v.x * ca - v.y * sa;
+                        const float ry = v.x * sa + v.y * ca;
+                        // V-flip (shape +Y → smaller pixel y), matching tile_uv.
+                        return vec2{ cx + rx * r_px, cy - ry * r_px };
+                    };
+                    for (size_t t = 0; t < n_tris; ++t) {
+                        const vec2 a = xf(mesh.verts[mesh.tris[t * 3 + 0]]);
+                        const vec2 b = xf(mesh.verts[mesh.tris[t * 3 + 1]]);
+                        const vec2 c = xf(mesh.verts[mesh.tris[t * 3 + 2]]);
+                        rasterize_tri_pixel_space(alpha.data(), K_LEAF_CELL_PX, K_LEAF_CELL_PX, a, b, c, 255);
+                    }
+                }
+            }
+            return alpha;
+        }
+
         // Compute alpha vertical extent for the cell (y_min/y_max of alpha>0 rows).
         struct AlphaExtent { int y_min; int y_max; };
         AlphaExtent compute_alpha_extent(const uint8_t* cell_alpha) {
@@ -477,6 +529,22 @@ namespace treegen {
                             blurred.data(),
                             k_leaf_color[si],
                             k_gradient[si]);
+
+            // C3 P1 — cluster cell (row 2, same col). Reuses the gradient/edge
+            // splat with no veins; provides the ClusterCard's albedo + alpha mask.
+            auto cluster_alpha = bake_cluster_cell_alpha(sp);
+            std::vector<uint8_t> cluster_vein(static_cast<size_t>(K_LEAF_CELL_PX) * K_LEAF_CELL_PX, 0);
+            std::vector<uint8_t> cluster_blur(static_cast<size_t>(K_LEAF_CELL_PX) * K_LEAF_CELL_PX, 0);
+            box_blur_masked(cluster_alpha.data(), cluster_blur.data(),
+                            K_LEAF_CELL_PX, K_LEAF_CELL_PX, 3, cluster_alpha.data());
+            splat_cell_rgba(rgba.data(),
+                            K_LEAF_CLUSTER_CELL_ROW,
+                            leaf_cluster_cell_col(sp),
+                            cluster_alpha.data(),
+                            cluster_vein.data(),
+                            cluster_blur.data(),
+                            k_leaf_color[si],
+                            k_gradient[si]);
         }
 
         // Needle-strip cell.
@@ -628,6 +696,31 @@ namespace treegen {
                                        + static_cast<size_t>(x0 + x)) * 4;
                     rgba[idx + 0] = static_cast<uint8_t>(std::max(0.0f, std::min(255.0f,
                                     trans * 255.0f + 0.5f)));
+                }
+            }
+
+            // C3 P1 — cluster cell translucency (no veins → edge-boosted flat).
+            // Same formula as above so ClusterCard leaves transmit like the
+            // single-leaf cells; the runtime reads this into frag_normal.a.
+            {
+                auto cl_alpha = bake_cluster_cell_alpha(sp);
+                std::vector<uint8_t> cl_blur(static_cast<size_t>(K_LEAF_CELL_PX) * K_LEAF_CELL_PX, 0);
+                box_blur_masked(cl_alpha.data(), cl_blur.data(),
+                                K_LEAF_CELL_PX, K_LEAF_CELL_PX, 3, cl_alpha.data());
+                const int cx0 = leaf_cluster_cell_col(sp) * K_LEAF_CELL_PX;
+                const int cy0 = K_LEAF_CLUSTER_CELL_ROW * K_LEAF_CELL_PX;
+                for (int y = 0; y < K_LEAF_CELL_PX; ++y) {
+                    for (int x = 0; x < K_LEAF_CELL_PX; ++x) {
+                        const int ci = y * K_LEAF_CELL_PX + x;
+                        if (cl_alpha[ci] == 0) continue;
+                        const float edge_dist  = static_cast<float>(cl_blur[ci]) / 255.0f;
+                        float trans = 1.0f + 0.3f * (1.0f - edge_dist);
+                        if (trans > 1.0f) trans = 1.0f;
+                        const size_t idx = (static_cast<size_t>(cy0 + y) * K_LEAF_ATLAS_PX
+                                           + static_cast<size_t>(cx0 + x)) * 4;
+                        rgba[idx + 0] = static_cast<uint8_t>(std::max(0.0f, std::min(255.0f,
+                                        trans * 255.0f + 0.5f)));
+                    }
                 }
             }
         }

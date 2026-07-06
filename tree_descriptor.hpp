@@ -32,6 +32,10 @@ enum class LeafGeometryType {
     BentCard,
     BentCrossCluster,
     BranchStrip,
+    // C3 P1 — one bent card per site whose UV samples a MULTI-leaf atlas cell
+    // (many baked leaves in one texture). A frozen type: no per-LOD downgrade;
+    // canopy fill comes from the multi-leaf texture, not from N cards.
+    ClusterCard,
 };
 
 // C5 P1 — species shape (mesh template + UV atlas slot resolved in P2).

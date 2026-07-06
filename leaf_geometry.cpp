@@ -139,15 +139,20 @@ void emit_single_card(LeafMeshOutput& out,
     out.indices.push_back(vbase + 3);
 }
 
-// ----- BentCard ---------------------------------------------------------------
+// ----- BentCard / ClusterCard -------------------------------------------------
 // Single-crease dihedral fold: 6 verts (4 corners + 2 center midpoints lifted
 // along normal), 4 tris (2 per half-plane). The crease runs perpendicular to
-// the card's forward axis — i.e. along the `right` direction.
+// the card's forward axis — i.e. along the `right` direction. Parametrized on
+// the UV functor so BentCard (single-leaf cell) and ClusterCard (multi-leaf
+// cell) share ONE emitter — the only difference is which atlas cell the card
+// samples. `uv_fn(lx, ly)` maps card-local [-1,1]² to atlas UV.
 
-void emit_bent_card(LeafMeshOutput& out,
-                    const LeafSite& site,
-                    const LeafMeshOptions& opts,
-                    uint32_t site_idx) {
+template <typename UvFn>
+void emit_bent_card_uv(LeafMeshOutput& out,
+                       const LeafSite& site,
+                       const LeafMeshOptions& opts,
+                       uint32_t site_idx,
+                       UvFn uv_fn) {
     vec3 up = normalized(site.normal);
     vec3 right, forward;
     make_card_basis(up, right, forward);
@@ -178,12 +183,12 @@ void emit_bent_card(LeafMeshOutput& out,
     };
 
     const vec2 uvcoords[6] = {
-        uv_for_quad_corner(opts.shape, -1.0f, -1.0f), // 0: BL
-        uv_for_quad_corner(opts.shape,  0.0f, -1.0f), // 1: BM
-        uv_for_quad_corner(opts.shape, +1.0f, -1.0f), // 2: BR
-        uv_for_quad_corner(opts.shape, -1.0f, +1.0f), // 3: TL
-        uv_for_quad_corner(opts.shape,  0.0f, +1.0f), // 4: TM
-        uv_for_quad_corner(opts.shape, +1.0f, +1.0f), // 5: TR
+        uv_fn(-1.0f, -1.0f), // 0: BL
+        uv_fn( 0.0f, -1.0f), // 1: BM
+        uv_fn(+1.0f, -1.0f), // 2: BR
+        uv_fn(-1.0f, +1.0f), // 3: TL
+        uv_fn( 0.0f, +1.0f), // 4: TM
+        uv_fn(+1.0f, +1.0f), // 5: TR
     };
 
     for (int i = 0; i < 6; ++i) {
@@ -208,6 +213,22 @@ void emit_bent_card(LeafMeshOutput& out,
     out.indices.push_back(vbase + 1);
     out.indices.push_back(vbase + 5);
     out.indices.push_back(vbase + 4);
+}
+
+void emit_bent_card(LeafMeshOutput& out, const LeafSite& site,
+                    const LeafMeshOptions& opts, uint32_t site_idx) {
+    const LeafShape shape = opts.shape;
+    emit_bent_card_uv(out, site, opts, site_idx,
+                      [shape](float lx, float ly) { return tile_uv(shape, lx, ly); });
+}
+
+// ClusterCard: identical bent-card geometry, UV routed to the multi-leaf
+// cluster cell so the single card reads as a whole leaf cluster.
+void emit_cluster_card(LeafMeshOutput& out, const LeafSite& site,
+                       const LeafMeshOptions& opts, uint32_t site_idx) {
+    const LeafShape shape = opts.shape;
+    emit_bent_card_uv(out, site, opts, site_idx,
+                      [shape](float lx, float ly) { return cluster_tile_uv(shape, lx, ly); });
 }
 
 // ----- BentCrossCluster -------------------------------------------------------
@@ -317,6 +338,7 @@ int tris_per_leaf(LeafGeometryType g, LeafShape s, int cluster_count_per_tip) {
         }
         case LeafGeometryType::BranchStrip:
             return K_TRIS_PER_STRIP;
+        case LeafGeometryType::ClusterCard:       return K_TRIS_PER_BENT_CARD;  // one bent card
     }
     return K_TRIS_PER_LEAF_SINGLE_CARD;
 }
@@ -335,6 +357,7 @@ int verts_per_leaf(LeafGeometryType g, LeafShape s, int cluster_count_per_tip) {
         }
         case LeafGeometryType::BranchStrip:
             return K_VERTS_PER_STRIP;
+        case LeafGeometryType::ClusterCard:       return K_VERTS_PER_BENT_CARD;  // one bent card
     }
     return K_VERTS_PER_LEAF_SINGLE_CARD;
 }
@@ -400,6 +423,7 @@ LeafMeshOutput build_leaf_mesh(const std::vector<LeafSite>& sites,
             ipl_reserve = shape_mesh.tris.size();
             break;
         case LeafGeometryType::BentCard:
+        case LeafGeometryType::ClusterCard:
             vpl_reserve = 6;
             ipl_reserve = 12;
             break;
@@ -435,6 +459,9 @@ LeafMeshOutput build_leaf_mesh(const std::vector<LeafSite>& sites,
                 break;
             case LeafGeometryType::BentCard:
                 emit_bent_card(out, sites[i], opts, idx);
+                break;
+            case LeafGeometryType::ClusterCard:
+                emit_cluster_card(out, sites[i], opts, idx);
                 break;
             case LeafGeometryType::BentCrossCluster:
                 emit_bent_cross_cluster(out, sites[i], opts, idx);

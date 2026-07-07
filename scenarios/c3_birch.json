@@ -36,14 +36,14 @@
     "light_dir": [0.0, 0.0, 1.0]
   },
   "leaves": {
-    "geometry_type": "bent_cross_cluster",
+    "geometry_type": "cluster_card",
     "shape": "birch_serrated",
-    "leaf_size_m": 0.24,
+    "leaf_size_m": 0.48,
     "cluster_count_per_tip": 2,
     "leaf_min_branch_depth": 3,
-    "leaf_density_per_meter": 10.0,
+    "leaf_density_per_meter": 4.5,
     "leaf_depth_density_curve": 1.2,
-    "leaf_phototropic_bias": 0.4,
+    "leaf_phototropic_bias": 0.75,
     "leaf_bend_half_angle": 0.349065850398866
   }
 }

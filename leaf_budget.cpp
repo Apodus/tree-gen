@@ -18,8 +18,13 @@ namespace {
 // (cf. k_stream_leaf_geom = 0xC5'02'01ULL in leaf_geometry.cpp).
 constexpr uint64_t k_stream_leaf_subsample = 0xC5'03'01ULL;
 
-// Per-LOD subsample fractions (matches plan / vision targets).
-constexpr float k_lod_subsample_fraction[4] = { 1.00f, 0.30f, 0.10f, 0.00f };
+// Per-LOD subsample fractions. C3 iter3 — reverted L1/L2 back toward the
+// original (0.55/0.45 → 0.30/0.18): densifying far canopy costs VERTEX-pass
+// geometry (tree_prim), which C5's alpha-prepass can't recover and which erases
+// C2's VS win. Coverage is instead held by denser cluster cells + bigger,
+// up-facing cards (coverage-per-tri), so far-L2 stays cheap. Budget-capped +
+// chain-min monotone.
+constexpr float k_lod_subsample_fraction[4] = { 1.00f, 0.30f, 0.15f, 0.00f };
 
 int budget_for_lod(const LeafBudget& b, int lod_index) {
     switch (lod_index) {

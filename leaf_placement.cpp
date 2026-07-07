@@ -12,6 +12,13 @@ namespace {
 
 constexpr uint64_t k_stream_branchwalk = 0xC5'01'06ULL;
 
+// C3 P3 — canopy-shell prune fraction. Sites whose crown-normalized radius is
+// below this are deep interior, occluded by the outer skin — dropped. Tuned so
+// the retained shell + larger cluster cards (P2) reads as a full canopy while
+// roughly halving the site count. Normal-INDEPENDENT (keeps the phototropic
+// same-count invariant) and RNG-free (deterministic /fp:precise).
+constexpr float k_shell_fraction = 0.40f;
+
 float vlen(vec3 v) { return std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z); }
 
 void make_basis(vec3 axis, vec3& out_u, vec3& out_v) {
@@ -95,6 +102,34 @@ std::vector<LeafSite> generate_leaf_sites(const TreeSkeleton& skel,
             ls.branch_depth_fraction = depth_frac;
             sites.push_back(ls);
         }
+    }
+
+    // C3 P3 — canopy-shell prune. Crown centroid + per-axis half-extent (the
+    // oblate envelope → even shell thickness); keep sites at/beyond the shell
+    // fraction, drop the occluded interior.
+    if (sites.size() > 1) {
+        float cx = 0.0f, cy = 0.0f, cz = 0.0f;
+        for (const auto& s : sites) { cx += s.position.x; cy += s.position.y; cz += s.position.z; }
+        const float inv_n = 1.0f / static_cast<float>(sites.size());
+        cx *= inv_n; cy *= inv_n; cz *= inv_n;
+
+        float hx = 1e-4f, hy = 1e-4f, hz = 1e-4f;
+        for (const auto& s : sites) {
+            hx = std::max(hx, std::abs(s.position.x - cx));
+            hy = std::max(hy, std::abs(s.position.y - cy));
+            hz = std::max(hz, std::abs(s.position.z - cz));
+        }
+
+        std::vector<LeafSite> shell;
+        shell.reserve(sites.size());
+        for (const auto& s : sites) {
+            const float qx = (s.position.x - cx) / hx;
+            const float qy = (s.position.y - cy) / hy;
+            const float qz = (s.position.z - cz) / hz;
+            if (std::sqrt(qx * qx + qy * qy + qz * qz) >= k_shell_fraction)
+                shell.push_back(s);
+        }
+        sites.swap(shell);
     }
 
     // Fill branch_depth_fraction from branch_id (single source of truth).

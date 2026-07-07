@@ -94,8 +94,8 @@ namespace treegen {
         // One leaf per grid slot, half-extent < half the slot so slots stay
         // separated. Deterministic in `sp`.
         constexpr uint64_t k_stream_cluster = 0xC3'01'03ULL;
-        constexpr int      k_cluster_grid_x = 3;
-        constexpr int      k_cluster_grid_y = 2;   // → 6 leaves per cluster cell
+        constexpr int      k_cluster_grid_x = 4;
+        constexpr int      k_cluster_grid_y = 3;   // → 12 leaves per cluster cell
 
         std::vector<uint8_t> bake_cluster_cell_alpha(LeafShape sp) {
             const LeafShapeMesh mesh = shape_mesh_for(sp);
@@ -108,7 +108,11 @@ namespace treegen {
             const float usable = static_cast<float>(K_LEAF_CELL_USABLE_PX);
             const float slot_w = usable / static_cast<float>(k_cluster_grid_x);
             const float slot_h = usable / static_cast<float>(k_cluster_grid_y);
-            const float r_px   = 0.38f * std::min(slot_w, slot_h);
+            // C3 iter3 — pack tight (0.38 → 0.50 slot): the multi-leaf cell had
+            // ~30% fill (inter-leaf gaps), so each ClusterCard covered little and
+            // holding coverage needed too many cards (geometry cost). Denser fill
+            // → ~1.6× more coverage-per-card → fewer cards / less tree_prim.
+            const float r_px   = 0.50f * std::min(slot_w, slot_h);
             const size_t n_tris = mesh.tris.size() / 3;
 
             for (int gy = 0; gy < k_cluster_grid_y; ++gy) {
@@ -532,6 +536,15 @@ namespace treegen {
 
             // C3 P1 — cluster cell (row 2, same col). Reuses the gradient/edge
             // splat with no veins; provides the ClusterCard's albedo + alpha mask.
+            // C3 P3 — AO-tint: the rebalanced canopy is thinner (fewer, larger
+            // cards, interior pruned) so cluster cards self-occlude less and read
+            // too bright. Darken the cluster albedo uniformly (hue/sat preserved)
+            // to sit at the old crown luminance. Only cluster_card species use
+            // this cell; pine (needle strip) is untouched.
+            constexpr float k_cluster_ao_tint = 0.85f;
+            const LinearRgb cluster_color{ k_leaf_color[si].r * k_cluster_ao_tint,
+                                           k_leaf_color[si].g * k_cluster_ao_tint,
+                                           k_leaf_color[si].b * k_cluster_ao_tint };
             auto cluster_alpha = bake_cluster_cell_alpha(sp);
             std::vector<uint8_t> cluster_vein(static_cast<size_t>(K_LEAF_CELL_PX) * K_LEAF_CELL_PX, 0);
             std::vector<uint8_t> cluster_blur(static_cast<size_t>(K_LEAF_CELL_PX) * K_LEAF_CELL_PX, 0);
@@ -543,7 +556,7 @@ namespace treegen {
                             cluster_alpha.data(),
                             cluster_vein.data(),
                             cluster_blur.data(),
-                            k_leaf_color[si],
+                            cluster_color,
                             k_gradient[si]);
         }
 
@@ -699,10 +712,16 @@ namespace treegen {
                 }
             }
 
-            // C3 P1 — cluster cell translucency (no veins → edge-boosted flat).
-            // Same formula as above so ClusterCard leaves transmit like the
-            // single-leaf cells; the runtime reads this into frag_normal.a.
+            // C3 P1→P3 fix — cluster cell translucency. Cluster cards carry NO
+            // vein map, so the single-leaf vein attenuation (1 - 0.8·vein) can't
+            // apply; the original flat 1.0 base + edge boost SATURATED to full
+            // translucency, pushing every ClusterCard fragment out of the
+            // [0.05,0.999) leaf band → invisible to the canopy classifier AND
+            // over-bright at runtime. A dense cluster transmits LESS than a bare
+            // leaf: anchor at 0.7 (matches the shader's foliage-trans fallback)
+            // with the same edge boost — max 0.7·1.3=0.91, stays in-band.
             {
+                constexpr float k_cluster_trans_base = 0.7f;
                 auto cl_alpha = bake_cluster_cell_alpha(sp);
                 std::vector<uint8_t> cl_blur(static_cast<size_t>(K_LEAF_CELL_PX) * K_LEAF_CELL_PX, 0);
                 box_blur_masked(cl_alpha.data(), cl_blur.data(),
@@ -714,7 +733,7 @@ namespace treegen {
                         const int ci = y * K_LEAF_CELL_PX + x;
                         if (cl_alpha[ci] == 0) continue;
                         const float edge_dist  = static_cast<float>(cl_blur[ci]) / 255.0f;
-                        float trans = 1.0f + 0.3f * (1.0f - edge_dist);
+                        float trans = k_cluster_trans_base * (1.0f + 0.3f * (1.0f - edge_dist));
                         if (trans > 1.0f) trans = 1.0f;
                         const size_t idx = (static_cast<size_t>(cy0 + y) * K_LEAF_ATLAS_PX
                                            + static_cast<size_t>(cx0 + x)) * 4;

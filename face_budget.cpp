@@ -11,6 +11,21 @@
 
 namespace treegen {
 
+LodBudget lod_budget_for_species(LeafShape species) {
+    LodBudget b;  // default = oak/pine diet (l0=10000) + shared l1/l2/l3
+    switch (species) {
+        // Broadleaf whose natural L0 sits below the estimator's cuttable floor:
+        // keep effectively uncapped (≈ natural). Ceilings comfortably above the
+        // observed natural (~17k / ~19k) so the allocator leaves them uncut.
+        case LeafShape::BirchSerrated: b.l0_tris = 20000; break;
+        case LeafShape::MapleStar:     b.l0_tris = 24000; break;
+        // OakLobed (ref ~42k → dieted to ~9.5k) + PineNeedle (ref ~11k → ~8.8k)
+        // both hit the 10k diet cleanly.
+        default: break;
+    }
+    return b;
+}
+
 namespace {
 
 // Default axial segment length pin — matches BarkMeshOptions::axial_segment_length_m.

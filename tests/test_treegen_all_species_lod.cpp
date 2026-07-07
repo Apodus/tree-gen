@@ -128,7 +128,8 @@ TEST_CASE("[treegen_all_species_lod] all species fit budget and retain silhouett
         "tools/rynx-treegen/scenarios/c3_maple.json",
     };
 
-    ts::LodBudget budget;  // P5 defaults: L0=12000, L1=4000, L2=1500, L3=4
+    // C3 P2 bark diet: per-species L0 (oak/pine 10k; birch/maple ≈natural),
+    // shared L1=4000/L2=1200/L3=4 — set inside the loop via lod_budget_for_species.
 
     // Silhouette-retention guard: when the budget binds (natural mesh >
     // budget), the cull rule must keep ≥X% of the budget — proves we don't
@@ -147,6 +148,8 @@ TEST_CASE("[treegen_all_species_lod] all species fit budget and retain silhouett
         REQUIRE_FALSE(fixture.empty());
         ts::Scenario s = ts::load_scenario(fixture);
         REQUIRE(s.kind == "tree");
+
+        const ts::LodBudget budget = ts::lod_budget_for_species(s.tree.leaves.shape);
 
         const uint64_t seed_effective = 42ull ^ s.scenario_fnv;
         ts::TreeSkeleton skel = ts::grow_skeleton(s.tree, seed_effective);
@@ -386,8 +389,8 @@ TEST_CASE("[treegen_leaves_all_species] all species emit leaves per LOD",
         "tools/rynx-treegen/scenarios/c3_maple.json",
     };
 
-    ts::LodBudget  bark_budget;   // P5 defaults: 12000 / 4000 / 1500 / 4
-    ts::LeafBudget leaf_budget;   // defaults: 4000 / 1200 / 400 / 0
+    ts::LodBudget  bark_budget;   // C3 P2 bark diet: 10000 / 4000 / 1200 / 4
+    ts::LeafBudget leaf_budget;   // C3 P3 retune: 8000 / 5000 / 4000 / 0
 
     for (const char* scenario_rel : scenarios) {
         const auto fixture = tsp::find_repo_file(scenario_rel);

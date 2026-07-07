@@ -19,9 +19,14 @@
 namespace treegen {
 
 struct LeafBudget {
-    int l0_tris = 4000;
-    int l1_tris = 2400;
-    int l2_tris = 1200;
+    // C3 P3 retune — crossed cluster cards (N cards/site, 8 tris/card) carry the
+    // canopy silhouette now (bark is dieted), and this is a TOP-DOWN game where
+    // the far L2 pose IS the primary player view, so L2 leaves must stay dense.
+    // Budgets raised to give the allocator room for the crossed cards; total L0
+    // (bark ~9.5k + leaf ≤8k) still lands ~17k, half the original ~36k.
+    int l0_tris = 8000;
+    int l1_tris = 5000;
+    int l2_tris = 4000;
     int l3_tris = 0;
 };
 

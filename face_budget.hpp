@@ -19,6 +19,7 @@
 #pragma once
 
 #include "skeleton.hpp"
+#include "tree_descriptor.hpp"   // LeafShape (per-species L0 budget)
 
 #include <cstdint>
 #include <vector>
@@ -26,15 +27,32 @@
 namespace treegen {
 
 struct LodBudget {
-    // P5 recalibration — collar mesh at forks (P2-P4 Hermite collar rings +
-    // crotch cap) replaces the old bipartite stitch, adding ~8x more fork
-    // tris per child. 36k accommodates oak's dense fork topology at full
-    // radial quality; still trivial on modern GPU (< 1 draw call worth).
-    int l0_tris = 36000;
+    // C3 P2 bark diet — the canopy rebalance moves silhouette work from bark to
+    // multi-leaf cluster cards, so the trunk no longer needs full radial detail.
+    // L0 10k holds oak's fork topology at reduced radial; meso-detail rides the
+    // bark NORMAL map (main.cpp idx1, tree.fs.glsl). Net L0 (bark+leaf) ~40k→~17k.
+    // L1 stays at the original 4000 (plan wanted 3000): pine's tall conical bark
+    // tracks the budget, and the tri estimator under-counts pine's fork-dense
+    // collar at L1 (actual > budget) while OVER-counting it at L0 — opposite-
+    // signed, so no single safety margin fits both without starving pine's L0
+    // retain floor. L1 was never the fat; the diet is L0 (72% off) + L2 (20% off).
+    // L0 is set PER-SPECIES via lod_budget_for_species (below); this default is
+    // oak's aggressive diet, shared by pine (also achievable).
+    int l0_tris = 10000;
     int l1_tris = 4000;
-    int l2_tris = 1500;
+    int l2_tris = 1200;
     int l3_tris = 4;
 };
+
+// Per-species L0 budget. The tri estimator's error is species-dependent (it
+// under-counts fork-dense BROADLEAF collar in the light-cut regime, over-counts
+// pine), so no single L0 works. The pre-C3 36k cap only ever bound OAK (ref
+// ~42k) — birch (~17k) / maple (~19k) natural meshes were always under it, i.e.
+// were never the fat; and the estimator can't cut them below natural without
+// overshooting the ceiling. So: oak+pine take the achievable 10k diet; birch/
+// maple keep an effectively-uncapped L0 (≈ their natural, unchanged from pre-C3).
+// L1/L2/L3 stay shared (every species already complies). See face_budget.cpp.
+LodBudget lod_budget_for_species(LeafShape species);
 
 struct PerOrderRadial {
     int trunk      = 12;  // depth 0

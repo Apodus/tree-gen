@@ -155,7 +155,7 @@ TEST_CASE("treegen_leaf_placement: TreeDescriptor.Leaves round-trips through JSO
     treegen::Scenario s = treegen::load_scenario(fixture);
 
     REQUIRE(s.tree.leaves.shape == treegen::LeafShape::OakLobed);
-    REQUIRE(std::abs(s.tree.leaves.leaf_density_per_meter - 8.0f) < 1e-4f);
+    REQUIRE(std::abs(s.tree.leaves.leaf_density_per_meter - 4.5f) < 1e-4f);  // C3 P2 rebalance
 
     const std::string serialized = treegen::serialize_tree_descriptor(s.tree);
     auto parsed = treegen::json::parse(serialized);

@@ -341,7 +341,8 @@ int main(int argc, char** argv) {
                 rng.seed(seed_effective, 0x5EA00FF5E7u /* "seam offset" stream */);
                 bopts.seam_offset_rad = rng.next_float_01() * 6.28318530717958647692f;
 
-                treegen::LodBudget budget;  // P5 defaults: L0=12000/L1=4000/L2=1500/L3=4
+                // C3 P2 bark diet — per-species L0 (oak/pine 10k; broadleaf ≈natural).
+                treegen::LodBudget budget = treegen::lod_budget_for_species(s.tree.leaves.shape);
 
                 const bool is_strip = (s.tree.leaves.geometry_type == treegen::LeafGeometryType::BranchStrip);
                 const bool has_leaves = is_strip
@@ -350,7 +351,7 @@ int main(int argc, char** argv) {
 
                 std::vector<treegen::LodOutput> lods;
                 if (has_leaves) {
-                    treegen::LeafBudget leaf_budget;  // defaults: 4000/1200/400/0
+                    treegen::LeafBudget leaf_budget;  // C3 P3 retune: 8000/5000/4000/0
                     treegen::LeafMeshOptions leaf_geom_opts;
                     leaf_geom_opts.geometry_type         = s.tree.leaves.geometry_type;
                     leaf_geom_opts.shape                 = s.tree.leaves.shape;

@@ -1,7 +1,7 @@
 // [treegen_species] — closes C3 by pinning the 4 first-ship species fixtures
 // (oak, pine, birch, maple) against shape-driven invariants. Same TU-linkage
-// rationale as test_treegen_skeleton: tool sources are linked into TestTech
-// via rynx_tests.sharpmake.cs so the test pins the exact code shipped in
+// rationale as test_treegen_skeleton: tool sources are linked into TestTreegen
+// via TreegenCore so the test pins the exact code shipped in
 // rynx-treegen.
 //
 // Per-species invariants are split into three buckets:

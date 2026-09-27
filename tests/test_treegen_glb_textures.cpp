@@ -9,6 +9,7 @@
 //   5. no images = backwards compatible (byte-identical to old 3-arg overload)
 
 #include "../external/catch2/catch.hpp"
+#include "test_env.hpp"
 
 #include "../bark_texture.hpp"
 #include "../glb_writer.hpp"
@@ -46,7 +47,7 @@ std::string tmp_path(const char* suffix) {
     namespace fs = std::filesystem;
     char tmp[64];
     std::snprintf(tmp, sizeof(tmp), "treegen_tex_%d_%s.glb", std::rand(), suffix);
-    return (fs::temp_directory_path() / tmp).string();
+    return treegen::test_env::scratch(tmp).string();
 }
 
 // Minimal mesh: 3 verts, 1 tri.

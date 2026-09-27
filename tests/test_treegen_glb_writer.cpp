@@ -3,7 +3,7 @@
 // All three tests run headless (no GPU) by going through the new
 // gltf_view::extract_first_primitive (header-only) for the round-trip.
 // The trivial_cylinder + glb_writer tool sources are linked directly into
-// TestTech via rynx_tests.sharpmake.cs — they are tool-self-contained and
+// TestTreegen via TreegenCore — they are tool-self-contained and
 // drag no engine state in.
 //
 // [treegen_cylinder]    — pinned vert + tri counts (first-write calibration).
@@ -11,6 +11,7 @@
 // [treegen_determinism] — two writes byte-identical (gate for golden harness).
 
 #include "../external/catch2/catch.hpp"
+#include "test_env.hpp"
 
 #include "../external/gltf_view.hpp"
 
@@ -40,11 +41,11 @@ std::vector<char> slurp_bytes(const std::string& path) {
 
 std::string tmp_path(const char* suffix) {
     namespace fs = std::filesystem;
-    // %p in MSVC isn't always unique enough; mix in random + pid for safety.
+    // Unique within the process; scratch() makes it unique across processes.
     char tmp[64];
     std::snprintf(tmp, sizeof(tmp), "treegen_test_%d_%s.glb",
                   std::rand(), suffix);
-    return (fs::temp_directory_path() / tmp).string();
+    return treegen::test_env::scratch(tmp).string();
 }
 
 treegen::PrimitiveData make_default_prim(const treegen::cpu_mesh_out& cm) {

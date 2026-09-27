@@ -3,8 +3,8 @@
 // shapes, envelope_aabb containment, and scenario.cpp loading kind:"tree").
 //
 // Tool sources (tree_descriptor.cpp + envelopes.cpp + scenario.cpp + extended
-// json_reader.cpp) are linked directly into TestTech via
-// rynx_tests.sharpmake.cs — same split rationale as C1 P2's trivial_cylinder.
+// json_reader.cpp) are linked directly into TestTreegen via
+// TreegenCore — same split rationale as C1 P2's trivial_cylinder.
 
 #include "../external/catch2/catch.hpp"
 

@@ -1,7 +1,7 @@
 // C6 P1 — PNG codec primitive. Pure decl; impl in png_encoder_api.cpp; the
 // STB_IMAGE_WRITE_IMPLEMENTATION anchor is in png_encoder_anchor.cpp (linked
-// only into rynx-treegen.exe). TestTech resolves stb_write_png symbols via
-// Graphics → frame_capture.cpp anchor (transitive via Application).
+// into rynx-treegen.exe and TestTreegen; TreegenCore carries no STB
+// implementation, so every consumer supplies its own).
 #pragma once
 
 #include <cstdint>

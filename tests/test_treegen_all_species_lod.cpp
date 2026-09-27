@@ -7,22 +7,14 @@
 //   * Monotone decreasing detail: L0 ≥ L1 ≥ L2.
 //   * Determinism: rebuild from same skeleton + budget → byte-identical GLB.
 //
-// [treegen_all_species_lod_render] — pins C4 P5 PNG goldens.
-//   4 species × 3 LODs = 12 entries + trivial_42 = 13 PNGs.
-//   Default behavior on missing golden = FAIL with diagnostic.
-//   RYNX_TREEGEN_GOLDEN_BOOTSTRAP=1 = regenerate missing goldens.
-//   pHash thresholds derived from intra-run noise floor (see roadmap progress):
-//     k_phash_threshold_soft = WARN  if hamming > N
-//     k_phash_threshold_hard = REQUIRE hamming <= M
-//   Tag isolation: only `[treegen_all_species_lod_render]` — NO `[treegen]`
-//   umbrella — so `testtech.exe [treegen]` stays in-process and fast.
+// [treegen_all_species_lod_render] lives in test_treegen_all_species_lod_render.cpp
+// (TestTreegenRender: it spawns the game).
 //
-// Link rationale identical to [treegen_lod_emission] — face_budget.cpp,
-// lod_emitter.cpp, branch_mesh.cpp, fork_blend.cpp, wind_weights.cpp,
-// space_colonization.cpp, scenario.cpp, tree_descriptor.cpp, envelopes.cpp
-// all linked into TestTech via rynx_tests.sharpmake.cs.
+// Link rationale identical to [treegen_lod_emission]: TestTreegen links the
+// tool's own sources (TreegenCore), /fp:precise as the tool compiles them.
 
 #include "../external/catch2/catch.hpp"
+#include "test_env.hpp"
 
 #include "test_support_paths.hpp"
 #include "../phash.hpp"
@@ -67,19 +59,11 @@ std::vector<char> slurp_bytes(const std::string& path) {
     return buf;
 }
 
-std::vector<std::uint8_t> slurp_png(const std::filesystem::path& p) {
-    std::ifstream f(p, std::ios::binary);
-    if (!f.good()) return {};
-    return std::vector<std::uint8_t>(
-        std::istreambuf_iterator<char>(f),
-        std::istreambuf_iterator<char>());
-}
-
 std::string tmp_path(const char* tag) {
     namespace fs = std::filesystem;
     char buf[80];
     std::snprintf(buf, sizeof(buf), "treegen_all_species_%d_%s.glb", std::rand(), tag);
-    return (fs::temp_directory_path() / buf).string();
+    return treegen::test_env::scratch(buf).string();
 }
 
 std::string write_lod_glb(const std::vector<ts::LodOutput>& lods, const char* tag) {
@@ -215,167 +199,13 @@ TEST_CASE("[treegen_all_species_lod] all species fit budget and retain silhouett
     }
 }
 
-// ---- C4 P5: per-species per-LOD render-pHash matrix ----------------------
-//
-// Threshold derivation (intra-run noise floor, logs/p5_phash_noise_floor.log):
-//   max_intra  = 0   (4 species × 3 LODs × 3 reruns)
-//   mean_intra = 0
-//   k_soft     = 4   (max(4, max_intra + 1) = max(4, 1) = 4)
-//   k_hard     = 8   (max(8, 2*max_intra + 2) = max(8, 2) = 8)
-// Renderer is fully deterministic for the static GLB render path under the
-// determinism knobs in render_glb_cli.cpp (fixed dt, AE off, hot-reload off,
-// fixed exposure). Soft-warn is set above zero to absorb the inevitable
-// driver/GPU-arch sliver if/when this runs on different HW.
-namespace {
-constexpr int k_phash_threshold_soft_render = 4;
-constexpr int k_phash_threshold_hard_render = 8;
-
-// Bootstrap-mode env-var gate (shared with [treegen_render_phash]). When set,
-// a missing golden = WARN + copy rendered PNG into repo + SUCCEED, so the
-// operator can re-baseline + commit. Default (unset) = explicit FAIL so a
-// missing golden never silently green-ships.
-inline const char* k_env_bootstrap = "RYNX_TREEGEN_GOLDEN_BOOTSTRAP";
-} // anonymous namespace
-
-TEST_CASE("[treegen_all_species_lod_render] per-species per-LOD render-pHash matches golden",
-          "[treegen_all_species_lod_render]") {   // NO [treegen] umbrella — opt-in only.
-    namespace tsp = rynx::test_support;
-    namespace fs  = std::filesystem;
-
-    const std::string treegen_exe = tsp::find_built_exe("rynx-treegen.exe");
-    const std::string game_exe    = tsp::find_built_exe("topdownshootergame.exe");
-    INFO("treegen_exe=" << treegen_exe);
-    INFO("game_exe="    << game_exe);
-    REQUIRE_FALSE(treegen_exe.empty());
-    REQUIRE_FALSE(game_exe.empty());
-
-    // game exe must run from build/topdownshooter/bin/ — VFS mounts are
-    // CWD-relative (see reference_run_from_bin_cwd memory).
-    const std::string game_bindir = fs::path(game_exe).parent_path().string();
-
-    // Anchor dir for bootstrap-mode writes. Walk to the tests/golden/ dir
-    // (existence-checked) and append "treegen/" — robust against trivial_42
-    // having just been deleted for re-baseline.
-    fs::path anchor_dir;
-    {
-        const std::string anchor_parent = tsp::find_repo_file("tests/golden/");
-        if (!anchor_parent.empty()) {
-            anchor_dir = fs::path(anchor_parent) / "treegen";
-        }
-    }
-
-    const char* species[] = { "oak", "pine", "birch", "maple" };
-    const int   lods[]    = { 0, 1, 2 };
-
-    for (const char* sp : species) {
-        const std::string scenario_rel = std::string("tools/rynx-treegen/scenarios/c3_")
-                                          + sp + ".json";
-        const std::string scenario_abs = tsp::find_repo_file(scenario_rel);
-        INFO("scenario=" << scenario_abs);
-        REQUIRE_FALSE(scenario_abs.empty());
-
-        // ONE GLB per species; reused across LODs (--lod=<i> picks at render).
-        const fs::path tmp_glb = fs::temp_directory_path()
-                                 / (std::string("treegen_c3_") + sp + "_42.glb");
-        std::error_code ec;
-        fs::remove(tmp_glb, ec);
-        {
-            std::ostringstream args;
-            args << "--scenario=\"" << scenario_abs
-                 << "\" --seed=42 --out=\"" << tmp_glb.string() << "\"";
-            const int rc = tsp::run_exe_in_dir(treegen_exe,
-                                               fs::current_path().string(),
-                                               args.str());
-            INFO("rynx-treegen [" << sp << "] rc=" << rc);
-            REQUIRE(rc == 0);
-            REQUIRE(fs::exists(tmp_glb));
-        }
-
-        for (int lod : lods) {
-            SECTION(std::string("species=") + sp + " lod=" + std::to_string(lod)) {
-                const fs::path tmp_png = fs::temp_directory_path()
-                                         / (std::string("treegen_c3_") + sp
-                                            + "_L" + std::to_string(lod) + ".png");
-                fs::remove(tmp_png, ec);
-                {
-                    std::ostringstream args;
-                    args << "--render-glb=\"" << tmp_glb.string()
-                         << "\" --out=\"" << tmp_png.string()
-                         << "\" --lod=" << lod;
-                    // Known issue: the game exe shutdown path has a ~10-20%
-                    // segfault rate (see project_shutdown_segfault.md — 2 sites
-                    // closed in T4 but the bug class is latent). Retry ONCE so
-                    // pHash-variance signal isn't drowned in process-shutdown
-                    // noise. PNG-existence check below is the real correctness
-                    // gate — a true render bug fails both attempts.
-                    int rc = tsp::run_exe_in_dir(game_exe, game_bindir, args.str());
-                    if (rc != 0 || !fs::exists(tmp_png)) {
-                        WARN("render rc=" << rc << " (or no PNG) on first attempt for "
-                             << sp << " L" << lod << " — retrying once (known shutdown flake)");
-                        fs::remove(tmp_png, ec);
-                        rc = tsp::run_exe_in_dir(game_exe, game_bindir, args.str());
-                    }
-                    INFO("topdownshootergame [" << sp << " L" << lod << "] rc=" << rc);
-                    REQUIRE(rc == 0);
-                    REQUIRE(fs::exists(tmp_png));
-                }
-
-                const std::string golden_rel = std::string("tests/golden/treegen/c3_")
-                                                + sp + "_L" + std::to_string(lod) + ".png";
-                const std::string golden_abs = tsp::find_repo_file(golden_rel);
-                if (golden_abs.empty()) {
-                    if (const char* env = std::getenv(k_env_bootstrap); env && env[0] == '1') {
-                        REQUIRE_FALSE(anchor_dir.empty());
-                        fs::create_directories(anchor_dir, ec);
-                        const fs::path dst = anchor_dir
-                                             / (std::string("c3_") + sp + "_L"
-                                                + std::to_string(lod) + ".png");
-                        fs::copy_file(tmp_png, dst,
-                                      fs::copy_options::overwrite_existing, ec);
-                        REQUIRE_FALSE(ec);
-                        WARN("bootstrapped golden: " << golden_rel
-                              << " (copied from " << tmp_png.string()
-                              << ") — review + commit");
-                        SUCCEED("bootstrap-mode wrote " + golden_rel);
-                        continue;
-                    }
-                    FAIL("missing golden: " << golden_rel
-                          << " — set " << k_env_bootstrap
-                          << "=1 to regenerate; do NOT commit env-var-set runs as 'green'");
-                }
-
-                const std::vector<std::uint8_t> rendered = slurp_png(tmp_png);
-                const std::vector<std::uint8_t> golden   = slurp_png(golden_abs);
-                REQUIRE_FALSE(rendered.empty());
-                REQUIRE_FALSE(golden.empty());
-
-                const std::uint64_t h_rendered = treegen::phash::compute(rendered);
-                const std::uint64_t h_golden   = treegen::phash::compute(golden);
-                const int           h          = treegen::phash::hamming(h_rendered, h_golden);
-                INFO("species=" << sp << " lod=" << lod
-                     << " rendered=" << std::hex << h_rendered
-                     << " golden="   << std::hex << h_golden
-                     << " hamming="  << std::dec << h);
-                if (h > k_phash_threshold_soft_render) {
-                    WARN("pHash drift over soft threshold (" << h
-                         << " > " << k_phash_threshold_soft_render << "): "
-                         << sp << " L" << lod);
-                }
-                REQUIRE(h <= k_phash_threshold_hard_render);
-            }
-        }
-
-        fs::remove(tmp_glb, ec);
-    }
-}
-
 // [treegen_leaves_all_species] — C5 P4. Uniform per-LOD leaf invariants across
 // the 4 production species (oak / pine / birch / maple). Pins the leaf-aware
 // 8-arg `emit_all_lods` overload + main.cpp's leaf wiring (density > 0 ∧ sites
 // non-empty → leaves emitted on L0..L2, L3 stays leafless).
 //
 // Joins the `[treegen]` umbrella sweep so a leaf-pipeline regression on any
-// species lights up the default `testtech.exe [treegen]` run; `[treegen_lod_leaves]`
+// species lights up the default `testtreegen.exe [treegen]` run; `[treegen_lod_leaves]`
 // remains the deeper oak-specific pin (multi-prim GLB round-trip + monotonicity
 // vs synthetic budgets).
 TEST_CASE("[treegen_leaves_all_species] all species emit leaves per LOD",

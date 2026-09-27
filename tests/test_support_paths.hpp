@@ -4,7 +4,7 @@
 //
 // Pre-T2.6.6, tech tests like test_spd_pyramid_shaders + test_wave_intrinsic_shaders
 // hardcoded paths like "../../../build/shaders/foo.refl.spv" — those resolve
-// correctly ONLY when TestTech.exe is invoked from rynx/build/tests/. Run
+// correctly ONLY when the test exe is invoked from rynx/build/tests/. Run
 // from the project root (or anywhere else) and the relative path produces a
 // non-existent file → REQUIRE(fh.good()) fires.
 //
@@ -32,7 +32,7 @@ namespace rynx::test_support {
 // missing-asset case clearly without an opaque "file open failed" deep in
 // load_spirv.
 //
-// The candidate list covers TestTech.exe invocation from:
+// The candidate list covers test-exe invocation from:
 //   - rynx/build/tests/ (the documented convention; ../../../build/shaders/)
 //   - rynx/build/ (../build/shaders/)
 //   - rynx/ (build/shaders/ — when build directory was symlinked or moved)
@@ -40,15 +40,8 @@ namespace rynx::test_support {
 //   - one extra level up for safety
 std::string find_built_shader(std::string_view filename);
 
-// Find a built exe by leaf filename. Same candidate-root strategy as
-// find_built_shader, but the roots target standard tool / game bin
-// directories (build/topdownshooter/bin, tools/rynx-treegen/, etc.).
-// Returns absolute path of the FIRST existing match (so child process
-// invocations are CWD-independent), or empty string if none match.
-//
-// Callers should REQUIRE_FALSE(result.empty()) and forward the result to
-// run_exe_in_dir below.
-std::string find_built_exe(std::string_view filename);
+// Executables the tests spawn are NOT searched for: test_env.hpp names them
+// by compile-time path. A search takes whatever copy is on disk.
 
 // Find a checked-in file by repo-relative path (e.g. "tests/golden/treegen/trivial_42.png").
 // Walks the same candidate-root ladder as find_built_shader but appends the

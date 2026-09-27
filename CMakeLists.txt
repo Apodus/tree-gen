@@ -19,11 +19,17 @@ endif()
 enable_testing()
 
 file(GLOB TEST_SOURCES CONFIGURE_DEPENDS tests/*.cpp)
+# The GPU render gates spawn game_one's topdownshootergame.exe; they build only
+# in game_one (TestTreegenRender).
+list(FILTER TEST_SOURCES EXCLUDE REGEX "test_treegen_(render_phash|species_library|all_species_lod_render)\\.cpp$")
 
 add_executable(treegen-tests ${LIB_SOURCES} stb_image_anchor.cpp png_encoder_anchor.cpp ${TEST_SOURCES})
 target_include_directories(treegen-tests SYSTEM PRIVATE external/stb)
 if(MSVC)
     target_compile_options(treegen-tests PRIVATE /fp:precise)
 endif()
+# [treegen_species_registry] spawns the tool: this build's, by compile-time path.
+add_dependencies(treegen-tests rynx-treegen)
+target_compile_definitions(treegen-tests PRIVATE RYNX_TREEGEN_EXE="$<TARGET_FILE:rynx-treegen>")
 
 add_test(NAME treegen COMMAND treegen-tests)

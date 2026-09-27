@@ -4,11 +4,12 @@
 // survives write/read.
 //
 // Same link rationale as test_treegen_branch_mesh: tool-side sources
-// (wind_weights.cpp / branch_mesh.cpp / fork_blend.cpp / …) link into TestTech
-// via rynx_tests.sharpmake.cs so this test pins exactly the code shipped in
+// (wind_weights.cpp / branch_mesh.cpp / fork_blend.cpp / …) link into TestTreegen
+// via TreegenCore so this test pins exactly the code shipped in
 // rynx-treegen.exe.
 
 #include "../external/catch2/catch.hpp"
+#include "test_env.hpp"
 
 #include "test_support_paths.hpp"
 
@@ -49,7 +50,7 @@ std::string tmp_path(const char* suffix) {
     namespace fs = std::filesystem;
     char tmp[64];
     std::snprintf(tmp, sizeof(tmp), "treegen_wind_%d_%s.glb", std::rand(), suffix);
-    return (fs::temp_directory_path() / tmp).string();
+    return treegen::test_env::scratch(tmp).string();
 }
 
 } // anonymous namespace

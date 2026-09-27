@@ -1,7 +1,7 @@
 // C6 P1 — PNG encode entry point. Decl in png_encoder.hpp; STB anchor in
-// png_encoder_anchor.cpp (treegen.exe only). This TU never defines
-// STB_IMAGE_WRITE_IMPLEMENTATION — both treegen.exe (own anchor) and
-// TestTech (Graphics → frame_capture.cpp anchor) resolve at link time.
+// png_encoder_anchor.cpp. This TU never defines
+// STB_IMAGE_WRITE_IMPLEMENTATION — its consumers (rynx-treegen.exe,
+// TestTreegen) link the anchor.
 #include "png_encoder.hpp"
 
 #include <stb_image_write.h>

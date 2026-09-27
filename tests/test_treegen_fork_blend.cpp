@@ -4,8 +4,8 @@
 // determinism: two invocations produce byte-identical positions + indices.
 //
 // Same link rationale as test_treegen_branch_mesh: tool sources (fork_blend.cpp
-// + branch_mesh.cpp + space_colonization.cpp + …) link into TestTech via
-// rynx_tests.sharpmake.cs so this test pins the exact code shipped in
+// + branch_mesh.cpp + space_colonization.cpp + …) link into TestTreegen via
+// TreegenCore so this test pins the exact code shipped in
 // rynx-treegen.exe.
 
 #include "../external/catch2/catch.hpp"

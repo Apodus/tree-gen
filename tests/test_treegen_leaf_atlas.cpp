@@ -2,7 +2,7 @@
 // alpha + diffuse rasterization + emitter UV migration. P3b adds tests 11-15
 // for normal + translucency.
 //
-// Tool sources link into TestTech via rynx_tests.sharpmake.cs:
+// Tool sources link into TestTreegen via TreegenCore:
 //   leaf_atlas.cpp (rebuilt for P3) + leaf_rasterizer.cpp + leaf_veins.cpp
 //   + leaf_shapes.cpp + leaf_geometry.cpp + png_encoder_api.cpp.
 // STB_IMAGE_IMPLEMENTATION anchor lives in rynx::graphics::image (Graphics dep).

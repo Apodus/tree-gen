@@ -2,6 +2,7 @@
 // resolve) and --species CLI flag (process-level exit code + GLB output).
 
 #include "../external/catch2/catch.hpp"
+#include "test_env.hpp"
 
 #include "test_support_paths.hpp"
 #include "../species_registry.hpp"
@@ -46,16 +47,15 @@ TEST_CASE("treegen_species_registry: --species oak --seed 42 produces GLB",
     namespace fs  = std::filesystem;
     namespace tsp = rynx::test_support;
 
-    const std::string exe = tsp::find_built_exe("rynx-treegen.exe");
-    REQUIRE_FALSE(exe.empty());
+    const fs::path exe = treegen::test_env::treegen_exe();
 
-    const fs::path tmp_glb = fs::temp_directory_path() / "treegen_species_registry_oak.glb";
+    const fs::path tmp_glb = treegen::test_env::scratch("treegen_species_registry_oak.glb");
     std::error_code ec;
     fs::remove(tmp_glb, ec);
 
     std::ostringstream args;
     args << "--species oak --seed 42 --out=\"" << tmp_glb.string() << "\"";
-    const int rc = tsp::run_exe_in_dir(exe, fs::current_path().string(), args.str());
+    const int rc = tsp::run_exe_in_dir(exe.string(), fs::current_path().string(), args.str());
     INFO("rc=" << rc);
     REQUIRE(rc == 0);
     REQUIRE(fs::exists(tmp_glb));

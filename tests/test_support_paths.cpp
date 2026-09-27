@@ -10,7 +10,7 @@ namespace rynx::test_support {
 
 std::string find_built_shader(std::string_view filename) {
     // Candidate roots, in priority order. Each is tried as `<root>/<filename>`.
-    // Covers TestTech.exe invocation from rynx/build/tests/, rynx/build/,
+    // Covers test-exe invocation from rynx/build/tests/, rynx/build/,
     // rynx/, project root, and one extra level up.
     constexpr std::array<const char*, 6> k_candidates = {
         "build/shaders/",                  // project root invocation
@@ -34,50 +34,8 @@ std::string find_built_shader(std::string_view filename) {
     return {};
 }
 
-std::string find_built_exe(std::string_view filename) {
-    // Candidate roots, in priority order. Each is tried as `<root>/<filename>`.
-    // Covers TestTech.exe invocation from rynx/build/tests/, rynx/build/, rynx/,
-    // and the project root. Tool exes live under tools/ or build/<game>/bin/.
-    constexpr std::array<const char*, 14> k_candidates = {
-        // Project root invocation (most common dev/CI).
-        "tools/rynx-treegen/",
-        "build/topdownshooter/bin/",
-        "build/cavecrew/bin/",
-        "build/bike/bin/",
-        "./",
-        // One level up (e.g. invoked from rynx/).
-        "../tools/rynx-treegen/",
-        "../build/topdownshooter/bin/",
-        // Two levels up.
-        "../../tools/rynx-treegen/",
-        "../../build/topdownshooter/bin/",
-        // Three levels up (rynx/build/tests/ → repo root).
-        "../../../tools/rynx-treegen/",
-        "../../../build/topdownshooter/bin/",
-        // Four levels up (safety).
-        "../../../../tools/rynx-treegen/",
-        "../../../../build/topdownshooter/bin/",
-        "../../../../",
-    };
-
-    for (const char* root : k_candidates) {
-        std::string candidate;
-        candidate.reserve(96);
-        candidate.append(root);
-        candidate.append(filename);
-        std::error_code ec;
-        if (std::filesystem::exists(candidate, ec) && !ec) {
-            // Return ABSOLUTE path so callers can chdir freely without losing the exe.
-            auto abs = std::filesystem::absolute(candidate, ec);
-            if (!ec) return abs.string();
-            return candidate;
-        }
-    }
-    return {};
-}
-
 std::string find_repo_file(std::string_view repo_relative_path) {
-    // Mirrors find_built_shader/find_built_exe but takes an arbitrary
+    // Mirrors find_built_shader but takes an arbitrary
     // repo-relative path (may include subdirs). Resolves to absolute on hit.
     constexpr std::array<const char*, 6> k_candidates = {
         "./",

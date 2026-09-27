@@ -1,10 +1,9 @@
 // [treegen_bark_oak_p1] — pins C6 P1 PNG codec + oak bark diffuse + leaf-atlas
 // stub. Tool sources (png_encoder_api.cpp + bark_texture.cpp + leaf_atlas.cpp)
-// link into TestTech via rynx_tests.sharpmake.cs; STB_IMAGE_WRITE
-// implementation symbols resolve through Graphics → frame_capture.cpp anchor.
-// stbi_load_from_memory is satisfied by stb_image.h's implementation that ships
-// from the Graphics dep (composite_capture or similar). If that breaks, this
-// TU is the canary.
+// link into TestTreegen via TreegenCore; the STB implementations come from
+// the tool's two anchor TUs (png_encoder_anchor.cpp, stb_image_anchor.cpp),
+// which TestTreegen links as the tool does. If that breaks, this TU is the
+// canary.
 
 #include "../external/catch2/catch.hpp"
 
@@ -13,8 +12,7 @@
 #include "../png_encoder.hpp"
 #include "../tree_descriptor.hpp"
 
-// STB_IMAGE_IMPLEMENTATION anchor lives in rynx/src/rynx/graphics/texture/image.cpp
-// (Graphics dep, transitive via Application → TestTech). We pick up the decl only.
+// STB_IMAGE_IMPLEMENTATION anchor: stb_image_anchor.cpp. We pick up the decl only.
 #include <stb_image.h>
 
 #include <algorithm>

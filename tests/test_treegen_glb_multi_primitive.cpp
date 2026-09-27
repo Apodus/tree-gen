@@ -8,6 +8,7 @@
 //   - material_index 0 / 1 land on the right primitive.
 
 #include "../external/catch2/catch.hpp"
+#include "test_env.hpp"
 
 #include "../external/gltf_view.hpp"
 
@@ -41,7 +42,7 @@ std::string tmp_path(const char* suffix) {
     namespace fs = std::filesystem;
     char tmp[64];
     std::snprintf(tmp, sizeof(tmp), "treegen_multi_%d_%s.glb", std::rand(), suffix);
-    return (fs::temp_directory_path() / tmp).string();
+    return treegen::test_env::scratch(tmp).string();
 }
 
 treegen::PrimitiveData make_prim(const treegen::cpu_mesh_out& cm,

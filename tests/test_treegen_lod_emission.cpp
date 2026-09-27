@@ -3,11 +3,12 @@
 // gltf_view confirms the `_RYNX_LOD` extension survives write/read and the
 // per-LOD wind weights are present.
 //
-// Link rationale: face_budget.cpp + lod_emitter.cpp linked into TestTech via
-// rynx_tests.sharpmake.cs so this test pins the exact code shipped in
+// Link rationale: face_budget.cpp + lod_emitter.cpp linked into TestTreegen via
+// TreegenCore so this test pins the exact code shipped in
 // rynx-treegen.exe.
 
 #include "../external/catch2/catch.hpp"
+#include "test_env.hpp"
 
 #include "test_support_paths.hpp"
 
@@ -53,7 +54,7 @@ std::string tmp_path(const char* suffix) {
     namespace fs = std::filesystem;
     char buf[64];
     std::snprintf(buf, sizeof(buf), "treegen_lod_%d_%s.glb", std::rand(), suffix);
-    return (fs::temp_directory_path() / buf).string();
+    return treegen::test_env::scratch(buf).string();
 }
 
 // Pack the 4 LODs into a multi-mesh GLB on disk; returns the path. Mirrors

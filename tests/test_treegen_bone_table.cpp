@@ -4,10 +4,11 @@
 // the original-node remap (run blend + rigid riders), compliance conservation
 // (total root-to-tip bend angle preserved exactly under runtime knobs), leaf
 // pivot pinning, and the _RYNX_BONE GLB emission. Tool sources link into
-// TestTech via rynx_tests.sharpmake.cs so this pins exactly the code shipped
+// TestTreegen via TreegenCore so this pins exactly the code shipped
 // in rynx-treegen.exe.
 
 #include "../external/catch2/catch.hpp"
+#include "test_env.hpp"
 
 #include "test_support_paths.hpp"
 
@@ -130,7 +131,7 @@ std::string tmp_path(const char* suffix) {
     namespace fs = std::filesystem;
     char buf[80];
     std::snprintf(buf, sizeof(buf), "treegen_bone_%d_%s.glb", std::rand(), suffix);
-    return (fs::temp_directory_path() / buf).string();
+    return treegen::test_env::scratch(buf).string();
 }
 
 size_t find_json_key(const std::string& json, const char* key) {

@@ -1,6 +1,6 @@
 // [treegen_leaf_geometry] — pins C5 P2's leaf geometry emitters. Three
 // geometry types × four species shapes. Tool sources (leaf_geometry.cpp +
-// leaf_shapes.cpp + their P1 deps) link into TestTech via rynx_tests.sharpmake.cs.
+// leaf_shapes.cpp + their P1 deps) link into TestTreegen via TreegenCore.
 
 #include "../external/catch2/catch.hpp"
 

@@ -1,7 +1,7 @@
 // [treegen_skeleton] — pins C3 P2's space-colonization output. Same split
 // rationale as test_treegen_descriptor: tool sources (space_colonization.cpp +
-// radius_solver.cpp + skeleton_json.cpp) link into TestTech via
-// rynx_tests.sharpmake.cs so tests pin the exact code shipped in rynx-treegen.
+// radius_solver.cpp + skeleton_json.cpp) link into TestTreegen via
+// TreegenCore so tests pin the exact code shipped in rynx-treegen.
 
 #include "../external/catch2/catch.hpp"
 

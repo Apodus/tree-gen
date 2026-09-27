@@ -1,6 +1,6 @@
 // [treegen_branch_mesh_p1] — pins C4 P1 bark mesh extrusion invariants. Same
 // link rationale as test_treegen_skeleton: tool sources (branch_mesh.cpp +
-// space_colonization.cpp + …) link into TestTech via rynx_tests.sharpmake.cs
+// space_colonization.cpp + …) link into TestTreegen via TreegenCore
 // so this test pins the exact code shipped in rynx-treegen.exe.
 
 #include "../external/catch2/catch.hpp"

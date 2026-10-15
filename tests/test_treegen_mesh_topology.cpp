@@ -41,16 +41,16 @@ TEST_CASE("[treegen_fork_normals] blended vertex normals within 15 deg of radial
     namespace tsp = rynx::test_support;
 
     const char* scenarios[] = {
-        "tools/rynx-treegen/scenarios/c3_oak.json",
-        "tools/rynx-treegen/scenarios/c3_pine.json",
-        "tools/rynx-treegen/scenarios/c3_birch.json",
-        "tools/rynx-treegen/scenarios/c3_maple.json",
+        "scenarios/c3_oak.json",
+        "scenarios/c3_pine.json",
+        "scenarios/c3_birch.json",
+        "scenarios/c3_maple.json",
     };
 
     constexpr float k_cos_15deg = 0.9659258f; // cos(15 deg)
 
     for (const char* rel : scenarios) {
-        const auto fixture = tsp::find_repo_file(rel);
+        const auto fixture = tsp::treegen_file(rel);
         REQUIRE_FALSE(fixture.empty());
 
         ts::Scenario s = ts::load_scenario(fixture);
@@ -129,14 +129,14 @@ TEST_CASE("[treegen_mesh_efficiency] continuation merge reduces vertex count",
     namespace tsp = rynx::test_support;
 
     const char* scenarios[] = {
-        "tools/rynx-treegen/scenarios/c3_oak.json",
-        "tools/rynx-treegen/scenarios/c3_pine.json",
-        "tools/rynx-treegen/scenarios/c3_birch.json",
-        "tools/rynx-treegen/scenarios/c3_maple.json",
+        "scenarios/c3_oak.json",
+        "scenarios/c3_pine.json",
+        "scenarios/c3_birch.json",
+        "scenarios/c3_maple.json",
     };
 
     for (const char* rel : scenarios) {
-        const auto fixture = tsp::find_repo_file(rel);
+        const auto fixture = tsp::treegen_file(rel);
         REQUIRE_FALSE(fixture.empty());
 
         ts::Scenario s = ts::load_scenario(fixture);
@@ -210,14 +210,14 @@ TEST_CASE("[treegen_tip_caps] every leaf node has end-cap geometry",
     namespace tsp = rynx::test_support;
 
     const char* scenarios[] = {
-        "tools/rynx-treegen/scenarios/c3_oak.json",
-        "tools/rynx-treegen/scenarios/c3_pine.json",
-        "tools/rynx-treegen/scenarios/c3_birch.json",
-        "tools/rynx-treegen/scenarios/c3_maple.json",
+        "scenarios/c3_oak.json",
+        "scenarios/c3_pine.json",
+        "scenarios/c3_birch.json",
+        "scenarios/c3_maple.json",
     };
 
     for (const char* rel : scenarios) {
-        const auto fixture = tsp::find_repo_file(rel);
+        const auto fixture = tsp::treegen_file(rel);
         REQUIRE_FALSE(fixture.empty());
 
         ts::Scenario s = ts::load_scenario(fixture);

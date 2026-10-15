@@ -21,6 +21,7 @@
 #include "space_colonization.hpp"
 #include "species_registry.hpp"
 #include "tree_descriptor.hpp"
+#include "treegen_root.hpp"
 #include "trivial_cylinder.hpp"
 #include "vec3.hpp"
 
@@ -35,12 +36,22 @@
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
 #include <vector>
 
+#ifndef TREEGEN_ROOT_FROM_EXE
+#error "rynx-treegen finds its scenarios from the exe's own location: the build must define TREEGEN_ROOT_FROM_EXE (the relative path from the exe's directory to the repository root)"
+#endif
+
 namespace {
+
+// The repository root for this exe; empty when the layout the build promised is absent.
+std::optional<std::filesystem::path> tool_root() {
+    return treegen::locate_root(treegen::executable_directory(), TREEGEN_ROOT_FROM_EXE);
+}
 
 // Single source of truth for shape names enumerated in --list-envelope-shapes.
 // EnvelopeShape <-> string conversion lives in tree_descriptor.cpp; this is
@@ -59,14 +70,14 @@ void print_usage() {
         "usage: rynx-treegen --scenario=<path> [--seed=<u64>] [--out=<path>] [--dump-skeleton-json=<path>] [--bake-impostor]\n"
         "       rynx-treegen --species=<name> [--seed=<u64>] [--out=<path>] [--dump-skeleton-json=<path>] [--bake-impostor]\n"
         "       rynx-treegen --list-species\n"
+        "       rynx-treegen --print-root\n"
         "       rynx-treegen --list-envelope-shapes\n"
         "       rynx-treegen --help\n");
 }
 
-// Enumerate scenarios/*.json next to the exe and (best-effort) the repo source
-// tree. Best-effort — failure is silently swallowed; --help still prints the
-// flag list.
-std::vector<std::filesystem::path> find_scenario_files() {
+// Enumerate <root>/scenarios/*.json. Best-effort — failure is silently
+// swallowed; --help still prints the flag list.
+std::vector<std::filesystem::path> find_scenario_files(const std::filesystem::path& root) {
     std::vector<std::filesystem::path> hits;
     namespace fs = std::filesystem;
 
@@ -80,17 +91,8 @@ std::vector<std::filesystem::path> find_scenario_files() {
         }
     };
 
-    // 1) next to the running exe (./scenarios/), 2) source-tree fallback for
-    // when the exe is invoked from a build output dir.
-    std::error_code ec;
-    const fs::path cwd = fs::current_path(ec);
-    if (!ec) {
-        scan(cwd / "scenarios");
-        scan(cwd / "tools" / "rynx-treegen" / "scenarios");
-    }
-
+    scan(root / "scenarios");
     std::sort(hits.begin(), hits.end());
-    hits.erase(std::unique(hits.begin(), hits.end()), hits.end());
     return hits;
 }
 
@@ -104,6 +106,7 @@ void print_help() {
         "  --out=<path>                  Mesh output (.glb).\n"
         "  --dump-skeleton-json=<path>   Write TreeSkeleton JSON dump (tree scenarios).\n"
         "  --list-species                Print available species names + exit.\n"
+        "  --print-root                  Print the repository root found from the exe's location + exit.\n"
         "  --list-envelope-shapes        Print the 5 envelope shape names + exit.\n"
         "  --bake-impostor               Bake 8-azimuth impostor atlas into L3 GLB image.\n"
         "  -h, --help                    Print this message + scenario index + exit.\n"
@@ -111,9 +114,13 @@ void print_help() {
         "Both --key=value and --key value forms accepted.\n"
         "--species and --scenario are mutually exclusive (exit 2 if both given).\n");
 
-    const auto scenarios = find_scenario_files();
-    if (scenarios.empty()) {
-        std::fprintf(stderr, "\nno scenarios/*.json found near cwd.\n");
+    const auto root = tool_root();
+    const auto scenarios = root ? find_scenario_files(*root) : std::vector<std::filesystem::path>{};
+    if (!root) {
+        std::fprintf(stderr, "\nno repository root (%s) at the layout this exe was built for; scenarios unavailable.\n",
+                     std::string(treegen::k_root_marker).c_str());
+    } else if (scenarios.empty()) {
+        std::fprintf(stderr, "\nno scenarios/*.json under %s.\n", root->string().c_str());
     } else {
         std::fprintf(stderr, "\navailable scenarios (%zu):\n", scenarios.size());
         for (const auto& p : scenarios) {
@@ -201,6 +208,16 @@ int main(int argc, char** argv) {
                 }
                 return 0;
             }
+            if (std::strcmp(arg, "--print-root") == 0) {
+                const auto root = tool_root();
+                if (!root) {
+                    std::fprintf(stderr, "rynx-treegen: no %s at the layout this exe was built for\n",
+                                 std::string(treegen::k_root_marker).c_str());
+                    return 2;
+                }
+                std::printf("%s\n", root->string().c_str());
+                return 0;
+            }
             if (std::strcmp(arg, "--list-species") == 0) {
                 for (const auto& name : treegen::get_species_names()) {
                     std::printf("%s\n", name.c_str());
@@ -228,7 +245,13 @@ int main(int argc, char** argv) {
 
         // Resolve --species to a scenario path.
         if (!species_name.empty()) {
-            scenario_path = treegen::get_scenario_path(species_name);
+            const auto root = tool_root();
+            if (!root) {
+                std::fprintf(stderr, "rynx-treegen: --species needs the repository root: no %s at the layout this exe was built for\n",
+                             std::string(treegen::k_root_marker).c_str());
+                return 2;
+            }
+            scenario_path = treegen::get_scenario_path(*root, species_name);
             if (scenario_path.empty()) {
                 std::fprintf(stderr, "rynx-treegen: unknown species '%s'\n", species_name.c_str());
                 return 2;

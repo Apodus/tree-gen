@@ -20,14 +20,14 @@ TEST_CASE("[treegen_depth_order] continuation inherits depth; split increments",
     namespace tsp = rynx::test_support;
 
     const char* scenarios[] = {
-        "tools/rynx-treegen/scenarios/c3_oak.json",
-        "tools/rynx-treegen/scenarios/c3_pine.json",
-        "tools/rynx-treegen/scenarios/c3_birch.json",
-        "tools/rynx-treegen/scenarios/c3_maple.json",
+        "scenarios/c3_oak.json",
+        "scenarios/c3_pine.json",
+        "scenarios/c3_birch.json",
+        "scenarios/c3_maple.json",
     };
 
     for (const char* rel : scenarios) {
-        const auto fixture = tsp::find_repo_file(rel);
+        const auto fixture = tsp::treegen_file(rel);
         REQUIRE_FALSE(fixture.empty());
 
         ts::Scenario s = ts::load_scenario(fixture);
@@ -79,14 +79,14 @@ TEST_CASE("[treegen_central_leader] depth-0 nodes exist above crown_base_z",
     namespace tsp = rynx::test_support;
 
     const char* scenarios[] = {
-        "tools/rynx-treegen/scenarios/c3_oak.json",
-        "tools/rynx-treegen/scenarios/c3_pine.json",
-        "tools/rynx-treegen/scenarios/c3_birch.json",
-        "tools/rynx-treegen/scenarios/c3_maple.json",
+        "scenarios/c3_oak.json",
+        "scenarios/c3_pine.json",
+        "scenarios/c3_birch.json",
+        "scenarios/c3_maple.json",
     };
 
     for (const char* rel : scenarios) {
-        const auto fixture = tsp::find_repo_file(rel);
+        const auto fixture = tsp::treegen_file(rel);
         REQUIRE_FALSE(fixture.empty());
 
         ts::Scenario s = ts::load_scenario(fixture);
@@ -111,7 +111,7 @@ TEST_CASE("[treegen_branching_onset] ramp delays first lateral branch",
           "[treegen][treegen_branching_onset]") {
     namespace tsp = rynx::test_support;
 
-    const auto fixture = tsp::find_repo_file("tools/rynx-treegen/scenarios/c3_oak.json");
+    const auto fixture = tsp::treegen_file("scenarios/c3_oak.json");
     REQUIRE_FALSE(fixture.empty());
 
     ts::Scenario s = ts::load_scenario(fixture);

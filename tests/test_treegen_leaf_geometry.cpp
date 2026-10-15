@@ -334,7 +334,7 @@ TEST_CASE("treegen_leaf_geometry: wind weights from generate_leaf_sites populate
     // Full pipeline: generate_leaf_sites → build_leaf_mesh. Verify that leaves
     // on deeper branches get different wind weights than leaves on shallower ones.
     namespace tsp = rynx::test_support;
-    const auto fixture = tsp::find_repo_file("tools/rynx-treegen/scenarios/c3_oak.json");
+    const auto fixture = tsp::treegen_file("scenarios/c3_oak.json");
     REQUIRE_FALSE(fixture.empty());
     treegen::Scenario s = treegen::load_scenario(fixture);
     const uint64_t seed = 42ull ^ s.scenario_fnv;
@@ -400,7 +400,7 @@ TEST_CASE("treegen_leaf_geometry: no trunk intersection — leaves outside trunk
     // assert each leaf's XY-distance from the trunk axis exceeds the trunk
     // radius at its z. (Leaf canopies live well outside the trunk cylinder.)
     namespace ts = rynx::test_support;
-    const auto fixture = ts::find_repo_file("tools/rynx-treegen/scenarios/c3_oak.json");
+    const auto fixture = ts::treegen_file("scenarios/c3_oak.json");
     REQUIRE_FALSE(fixture.empty());
     treegen::Scenario s = treegen::load_scenario(fixture);
     const uint64_t seed = 42ull ^ s.scenario_fnv;

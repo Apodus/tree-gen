@@ -27,7 +27,7 @@ TEST_CASE("treegen_leaf_placement: branch_walk oak produces sane site set",
           "[treegen][treegen_leaf_placement]") {
     namespace ts = rynx::test_support;
 
-    const auto fixture = ts::find_repo_file("tools/rynx-treegen/scenarios/c3_oak.json");
+    const auto fixture = ts::treegen_file("scenarios/c3_oak.json");
     INFO("fixture=" << fixture);
     REQUIRE_FALSE(fixture.empty());
 
@@ -59,7 +59,7 @@ TEST_CASE("treegen_leaf_placement: deterministic across runs (same seed)",
           "[treegen][treegen_leaf_placement][treegen_leaf_determinism]") {
     namespace ts = rynx::test_support;
 
-    const auto fixture = ts::find_repo_file("tools/rynx-treegen/scenarios/c3_oak.json");
+    const auto fixture = ts::treegen_file("scenarios/c3_oak.json");
     REQUIRE_FALSE(fixture.empty());
     treegen::Scenario s = treegen::load_scenario(fixture);
     const uint64_t seed = 42ull ^ s.scenario_fnv;
@@ -95,7 +95,7 @@ TEST_CASE("treegen_leaf_placement: no sites at depth < min_depth",
           "[treegen][treegen_leaf_placement]") {
     namespace ts = rynx::test_support;
 
-    const auto fixture = ts::find_repo_file("tools/rynx-treegen/scenarios/c3_oak.json");
+    const auto fixture = ts::treegen_file("scenarios/c3_oak.json");
     REQUIRE_FALSE(fixture.empty());
     treegen::Scenario s = treegen::load_scenario(fixture);
     const uint64_t seed = 42ull ^ s.scenario_fnv;
@@ -119,14 +119,14 @@ TEST_CASE("treegen_leaf_placement: all species generate valid leaf meshes",
     namespace ts = rynx::test_support;
 
     const char* scenarios[] = {
-        "tools/rynx-treegen/scenarios/c3_oak.json",
-        "tools/rynx-treegen/scenarios/c3_pine.json",
-        "tools/rynx-treegen/scenarios/c3_birch.json",
-        "tools/rynx-treegen/scenarios/c3_maple.json",
+        "scenarios/c3_oak.json",
+        "scenarios/c3_pine.json",
+        "scenarios/c3_birch.json",
+        "scenarios/c3_maple.json",
     };
 
     for (const char* scenario_rel : scenarios) {
-        const auto fixture = ts::find_repo_file(scenario_rel);
+        const auto fixture = ts::treegen_file(scenario_rel);
         REQUIRE_FALSE(fixture.empty());
         treegen::Scenario s = treegen::load_scenario(fixture);
         const uint64_t seed = 42ull ^ s.scenario_fnv;
@@ -150,7 +150,7 @@ TEST_CASE("treegen_leaf_placement: TreeDescriptor.Leaves round-trips through JSO
           "[treegen][treegen_leaf_placement][treegen_leaf_descriptor_roundtrip]") {
     namespace ts = rynx::test_support;
 
-    const auto fixture = ts::find_repo_file("tools/rynx-treegen/scenarios/c3_oak.json");
+    const auto fixture = ts::treegen_file("scenarios/c3_oak.json");
     REQUIRE_FALSE(fixture.empty());
     treegen::Scenario s = treegen::load_scenario(fixture);
 
@@ -180,7 +180,7 @@ TEST_CASE("treegen_leaf_placement: branch_walk sites lie near qualifying skeleto
           "[treegen][treegen_leaf_placement][treegen_leaf_branch_walk]") {
     namespace ts = rynx::test_support;
 
-    const auto fixture = ts::find_repo_file("tools/rynx-treegen/scenarios/c3_oak.json");
+    const auto fixture = ts::treegen_file("scenarios/c3_oak.json");
     REQUIRE_FALSE(fixture.empty());
     treegen::Scenario s = treegen::load_scenario(fixture);
     const uint64_t seed = 42ull ^ s.scenario_fnv;
@@ -218,7 +218,7 @@ TEST_CASE("treegen_leaf_placement: branch_walk tangent/normal are unit and ortho
           "[treegen][treegen_leaf_placement][treegen_leaf_branch_walk]") {
     namespace ts = rynx::test_support;
 
-    const auto fixture = ts::find_repo_file("tools/rynx-treegen/scenarios/c3_oak.json");
+    const auto fixture = ts::treegen_file("scenarios/c3_oak.json");
     REQUIRE_FALSE(fixture.empty());
     treegen::Scenario s = treegen::load_scenario(fixture);
     const uint64_t seed = 42ull ^ s.scenario_fnv;
@@ -247,7 +247,7 @@ TEST_CASE("treegen_leaf_placement: branch_walk depth-density monotonicity with c
           "[treegen][treegen_leaf_placement][treegen_leaf_branch_walk]") {
     namespace ts = rynx::test_support;
 
-    const auto fixture = ts::find_repo_file("tools/rynx-treegen/scenarios/c3_oak.json");
+    const auto fixture = ts::treegen_file("scenarios/c3_oak.json");
     REQUIRE_FALSE(fixture.empty());
     treegen::Scenario s = treegen::load_scenario(fixture);
     const uint64_t seed = 42ull ^ s.scenario_fnv;
@@ -289,7 +289,7 @@ TEST_CASE("treegen_leaf_placement: branch_walk phototropic bias shifts normals t
           "[treegen][treegen_leaf_placement][treegen_leaf_branch_walk_phototropic]") {
     namespace ts = rynx::test_support;
 
-    const auto fixture = ts::find_repo_file("tools/rynx-treegen/scenarios/c3_oak.json");
+    const auto fixture = ts::treegen_file("scenarios/c3_oak.json");
     REQUIRE_FALSE(fixture.empty());
     treegen::Scenario s = treegen::load_scenario(fixture);
     const uint64_t seed = 42ull ^ s.scenario_fnv;
@@ -325,7 +325,7 @@ TEST_CASE("treegen_leaf_placement: branch_walk bias=1.0 gives world_up",
           "[treegen][treegen_leaf_placement][treegen_leaf_branch_walk_phototropic]") {
     namespace ts = rynx::test_support;
 
-    const auto fixture = ts::find_repo_file("tools/rynx-treegen/scenarios/c3_oak.json");
+    const auto fixture = ts::treegen_file("scenarios/c3_oak.json");
     REQUIRE_FALSE(fixture.empty());
     treegen::Scenario s = treegen::load_scenario(fixture);
     const uint64_t seed = 42ull ^ s.scenario_fnv;

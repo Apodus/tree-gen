@@ -18,8 +18,8 @@ TEST_CASE("treegen: render trivial cylinder phash within 6 of golden",
           "[treegen_render_phash]") {
     namespace rg = treegen::render_golden;
 
-    const std::string scenario = rynx::test_support::find_repo_file(
-        "tools/rynx-treegen/scenarios/trivial_cylinder.json");
+    const std::string scenario = rynx::test_support::treegen_file(
+        "scenarios/trivial_cylinder.json");
     INFO("scenario=" << scenario);
     REQUIRE_FALSE(scenario.empty());
 

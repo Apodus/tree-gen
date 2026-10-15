@@ -77,7 +77,7 @@ TEST_CASE("treegen_descriptor: JSON round-trip on c3_oak fixture",
           "[treegen][treegen_descriptor][treegen_descriptor_roundtrip]") {
     namespace ts = rynx::test_support;
 
-    const auto fixture = ts::find_repo_file("tools/rynx-treegen/scenarios/c3_oak.json");
+    const auto fixture = ts::treegen_file("scenarios/c3_oak.json");
     INFO("fixture=" << fixture);
     REQUIRE_FALSE(fixture.empty());
 
@@ -264,7 +264,7 @@ TEST_CASE("treegen_descriptor: scenario.cpp loads kind:\"tree\"",
           "[treegen][treegen_descriptor][treegen_descriptor_scenario_load]") {
     namespace ts = rynx::test_support;
 
-    const auto fixture = ts::find_repo_file("tools/rynx-treegen/scenarios/c3_oak.json");
+    const auto fixture = ts::treegen_file("scenarios/c3_oak.json");
     REQUIRE_FALSE(fixture.empty());
 
     treegen::Scenario s = treegen::load_scenario(fixture);
@@ -275,7 +275,7 @@ TEST_CASE("treegen_descriptor: scenario.cpp loads kind:\"tree\"",
     REQUIRE(s.tree.envelope.shape == treegen::EnvelopeShape::OblateSpheroid);
 
     // trivial_cylinder path still works alongside the tree path.
-    const auto cyl_fixture = ts::find_repo_file("tools/rynx-treegen/scenarios/trivial_cylinder.json");
+    const auto cyl_fixture = ts::treegen_file("scenarios/trivial_cylinder.json");
     REQUIRE_FALSE(cyl_fixture.empty());
     treegen::Scenario cyl = treegen::load_scenario(cyl_fixture);
     REQUIRE(cyl.kind == "trivial_cylinder");

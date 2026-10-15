@@ -59,7 +59,7 @@ struct SpeciesFixture {
 SpeciesFixture load_species(const char* scenario_rel) {
     namespace tsp = rynx::test_support;
     SpeciesFixture f;
-    f.path = tsp::find_repo_file(scenario_rel);
+    f.path = tsp::treegen_file(scenario_rel);
     REQUIRE_FALSE(f.path.empty());
     f.scenario = ts::load_scenario(f.path);
     REQUIRE(f.scenario.kind == "tree");
@@ -83,10 +83,10 @@ std::vector<int> child_counts(const ts::TreeSkeleton& skel) {
 TEST_CASE("[treegen_junction_shoulder] fork parent-rim ring is swelled",
           "[treegen][treegen_junction_shoulder]") {
     const char* scenarios[] = {
-        "tools/rynx-treegen/scenarios/c3_oak.json",
-        "tools/rynx-treegen/scenarios/c3_pine.json",
-        "tools/rynx-treegen/scenarios/c3_birch.json",
-        "tools/rynx-treegen/scenarios/c3_maple.json",
+        "scenarios/c3_oak.json",
+        "scenarios/c3_pine.json",
+        "scenarios/c3_birch.json",
+        "scenarios/c3_maple.json",
     };
 
     for (const char* rel : scenarios) {
@@ -141,10 +141,10 @@ TEST_CASE("[treegen_junction_shoulder] fork parent-rim ring is swelled",
 TEST_CASE("[treegen_junction_approach_monotonic] swell zone radii are non-decreasing",
           "[treegen][treegen_junction_approach_monotonic]") {
     const char* scenarios[] = {
-        "tools/rynx-treegen/scenarios/c3_oak.json",
-        "tools/rynx-treegen/scenarios/c3_pine.json",
-        "tools/rynx-treegen/scenarios/c3_birch.json",
-        "tools/rynx-treegen/scenarios/c3_maple.json",
+        "scenarios/c3_oak.json",
+        "scenarios/c3_pine.json",
+        "scenarios/c3_birch.json",
+        "scenarios/c3_maple.json",
     };
 
     for (const char* rel : scenarios) {

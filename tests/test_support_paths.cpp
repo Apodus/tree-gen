@@ -1,75 +1,35 @@
 #include "test_support_paths.hpp"
 
-#include <array>
+#include "../treegen_root.hpp"
+
 #include <cstdlib>
-#include <filesystem>
 #include <sstream>
+#include <stdexcept>
 #include <string>
+
+#ifndef TREEGEN_ROOT_FROM_EXE
+#error "the treegen tests find the repository from the test exe's own location: the build must define TREEGEN_ROOT_FROM_EXE (the relative path from the exe's directory to the repository root)"
+#endif
 
 namespace rynx::test_support {
 
-std::string find_built_shader(std::string_view filename) {
-    // Candidate roots, in priority order. Each is tried as `<root>/<filename>`.
-    // Covers test-exe invocation from rynx/build/tests/, rynx/build/,
-    // rynx/, project root, and one extra level up.
-    constexpr std::array<const char*, 6> k_candidates = {
-        "build/shaders/",                  // project root invocation
-        "./",                              // executable dir if shader is alongside
-        "../build/shaders/",               // one up from rynx/build/tests/
-        "../../build/shaders/",            // two up
-        "../../../build/shaders/",         // three up (documented convention)
-        "../../../../build/shaders/",      // four up (safety)
-    };
-
-    for (const char* root : k_candidates) {
-        std::string candidate;
-        candidate.reserve(64);
-        candidate.append(root);
-        candidate.append(filename);
-        std::error_code ec;
-        if (std::filesystem::exists(candidate, ec) && !ec) {
-            return candidate;
-        }
-    }
-    return {};
+const std::filesystem::path& treegen_root() {
+    static const std::filesystem::path root = [] {
+        const auto exe_dir = treegen::executable_directory();
+        const auto found = treegen::locate_root(exe_dir, TREEGEN_ROOT_FROM_EXE);
+        if (!found)
+            throw std::runtime_error("no " + std::string(treegen::k_root_marker) + " at " +
+                                     (exe_dir / TREEGEN_ROOT_FROM_EXE).lexically_normal().string() +
+                                     " (" + TREEGEN_ROOT_FROM_EXE + " from the exe's directory " + exe_dir.string() + ")");
+        return *found;
+    }();
+    return root;
 }
 
-std::string find_repo_file(std::string_view repo_relative_path) {
-    // Mirrors find_built_shader but takes an arbitrary
-    // repo-relative path (may include subdirs). Resolves to absolute on hit.
-    constexpr std::array<const char*, 6> k_candidates = {
-        "./",
-        "../",
-        "../../",
-        "../../../",
-        "../../../../",
-        "../../../../../",
-    };
-
-    // Standalone treegen repo: callers pass game_one-relative paths like
-    // "tools/rynx-treegen/scenarios/c3_oak.json". When running from the
-    // standalone treegen repo root, strip the prefix so we find
-    // "scenarios/c3_oak.json" directly.
-    constexpr std::string_view k_treegen_prefix = "tools/rynx-treegen/";
-    std::string_view stripped = repo_relative_path;
-    if (stripped.substr(0, k_treegen_prefix.size()) == k_treegen_prefix)
-        stripped = stripped.substr(k_treegen_prefix.size());
-
-    for (std::string_view path : { repo_relative_path, stripped }) {
-        for (const char* root : k_candidates) {
-            std::string candidate;
-            candidate.reserve(128);
-            candidate.append(root);
-            candidate.append(path);
-            std::error_code ec;
-            if (std::filesystem::exists(candidate, ec) && !ec) {
-                auto abs = std::filesystem::absolute(candidate, ec);
-                if (!ec) return abs.string();
-                return candidate;
-            }
-        }
-    }
-    return {};
+std::string treegen_file(std::string_view relative) {
+    const std::filesystem::path path = treegen_root() / std::filesystem::path(relative);
+    std::error_code ec;
+    return std::filesystem::exists(path, ec) && !ec ? path.string() : std::string{};
 }
 
 int run_exe_in_dir(std::string_view exe_abs,

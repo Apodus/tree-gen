@@ -33,8 +33,8 @@ TEST_CASE("[treegen_all_species_lod_render] per-species per-LOD render-pHash mat
     const int   lods[]    = { 0, 1, 2 };
 
     for (const char* sp : species) {
-        const std::string scenario = rynx::test_support::find_repo_file(
-            std::string("tools/rynx-treegen/scenarios/c3_") + sp + ".json");
+        const std::string scenario = rynx::test_support::treegen_file(
+            std::string("scenarios/c3_") + sp + ".json");
         INFO("scenario=" << scenario);
         REQUIRE_FALSE(scenario.empty());
 

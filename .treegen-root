@@ -1,0 +1,1 @@
+rynx-treegen root marker: an executable resolves its data directory by finding this file (treegen_root.hpp)

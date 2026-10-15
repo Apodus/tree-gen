@@ -22,7 +22,7 @@ namespace ts = treegen;
 TEST_CASE("[treegen_branch_mesh_p1] oak skeleton produces valid bark mesh",
           "[treegen][treegen_branch_mesh_p1]") {
     namespace tsp = rynx::test_support;
-    const auto fixture = tsp::find_repo_file("tools/rynx-treegen/scenarios/c3_oak.json");
+    const auto fixture = tsp::treegen_file("scenarios/c3_oak.json");
     REQUIRE_FALSE(fixture.empty());
 
     ts::Scenario s = ts::load_scenario(fixture);
@@ -106,7 +106,7 @@ TEST_CASE("[treegen_branch_mesh_p1] every triangle has three distinct vertices",
     // bug or a degenerate ring (radius=0 + zero-len segment that slipped past
     // the 1e-5f guard).
     namespace tsp = rynx::test_support;
-    const auto fixture = tsp::find_repo_file("tools/rynx-treegen/scenarios/c3_oak.json");
+    const auto fixture = tsp::treegen_file("scenarios/c3_oak.json");
     REQUIRE_FALSE(fixture.empty());
     ts::Scenario s = ts::load_scenario(fixture);
     ts::TreeSkeleton skel = ts::grow_skeleton(s.tree, 0ull ^ s.scenario_fnv);

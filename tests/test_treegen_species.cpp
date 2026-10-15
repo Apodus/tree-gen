@@ -132,9 +132,9 @@ TEST_CASE("treegen_species: per-species invariants on 4 first-ship fixtures",
 
     for (const auto& sp : k_species) {
         INFO("species=" << sp.species_name);
-        const std::string repo_rel = std::string("tools/rynx-treegen/scenarios/") +
+        const std::string repo_rel = std::string("scenarios/") +
                                      sp.scenario_filename;
-        const auto fixture = ts::find_repo_file(repo_rel);
+        const auto fixture = ts::treegen_file(repo_rel);
         REQUIRE_FALSE(fixture.empty());
 
         treegen::Scenario s = treegen::load_scenario(fixture);

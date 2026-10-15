@@ -123,7 +123,7 @@ TEST_CASE("[treegen_lod_leaves] oak default-budget per-LOD invariants + multi-pr
     namespace tsp = rynx::test_support;
     namespace fs  = std::filesystem;
 
-    const auto fixture = tsp::find_repo_file("tools/rynx-treegen/scenarios/c3_oak.json");
+    const auto fixture = tsp::treegen_file("scenarios/c3_oak.json");
     INFO("fixture=" << fixture);
     REQUIRE_FALSE(fixture.empty());
 
@@ -394,7 +394,7 @@ TEST_CASE("[treegen_lod_leaves] LOD leaf scale increases with LOD index",
     // LODs in the full emit pipeline.
     namespace tsp = rynx::test_support;
 
-    const auto fixture = tsp::find_repo_file("tools/rynx-treegen/scenarios/c3_oak.json");
+    const auto fixture = tsp::treegen_file("scenarios/c3_oak.json");
     REQUIRE_FALSE(fixture.empty());
 
     ts::Scenario s = ts::load_scenario(fixture);
@@ -463,7 +463,7 @@ TEST_CASE("[treegen_lod_leaves] determinism — second emit byte-equal to first"
     namespace tsp = rynx::test_support;
     namespace fs  = std::filesystem;
 
-    const auto fixture = tsp::find_repo_file("tools/rynx-treegen/scenarios/c3_oak.json");
+    const auto fixture = tsp::treegen_file("scenarios/c3_oak.json");
     REQUIRE_FALSE(fixture.empty());
 
     ts::Scenario s = ts::load_scenario(fixture);

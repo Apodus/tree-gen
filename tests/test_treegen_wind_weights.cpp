@@ -58,7 +58,7 @@ std::string tmp_path(const char* suffix) {
 TEST_CASE("[treegen_wind_weights] formula assertions on oak fixture",
           "[treegen][treegen_wind_weights]") {
     namespace tsp = rynx::test_support;
-    const auto fixture = tsp::find_repo_file("tools/rynx-treegen/scenarios/c3_oak.json");
+    const auto fixture = tsp::treegen_file("scenarios/c3_oak.json");
     REQUIRE_FALSE(fixture.empty());
 
     ts::Scenario s = ts::load_scenario(fixture);
@@ -178,7 +178,7 @@ TEST_CASE("[treegen_wind_weights] GLB round-trip preserves _RYNX_WIND bytes",
     namespace fs = std::filesystem;
     namespace tsp = rynx::test_support;
 
-    const auto fixture = tsp::find_repo_file("tools/rynx-treegen/scenarios/c3_oak.json");
+    const auto fixture = tsp::treegen_file("scenarios/c3_oak.json");
     REQUIRE_FALSE(fixture.empty());
 
     ts::Scenario s = ts::load_scenario(fixture);

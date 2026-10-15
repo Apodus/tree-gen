@@ -106,10 +106,10 @@ TEST_CASE("[treegen_all_species_lod] all species fit budget and retain silhouett
     namespace fs  = std::filesystem;
 
     const char* scenarios[] = {
-        "tools/rynx-treegen/scenarios/c3_oak.json",
-        "tools/rynx-treegen/scenarios/c3_pine.json",
-        "tools/rynx-treegen/scenarios/c3_birch.json",
-        "tools/rynx-treegen/scenarios/c3_maple.json",
+        "scenarios/c3_oak.json",
+        "scenarios/c3_pine.json",
+        "scenarios/c3_birch.json",
+        "scenarios/c3_maple.json",
     };
 
     // C3 P2 bark diet: per-species L0 (oak/pine 10k; birch/maple ≈natural),
@@ -128,7 +128,7 @@ TEST_CASE("[treegen_all_species_lod] all species fit budget and retain silhouett
     const int l2_retain_pct = 50;  // L2 trim even more
 
     for (const char* scenario_rel : scenarios) {
-        const auto fixture = tsp::find_repo_file(scenario_rel);
+        const auto fixture = tsp::treegen_file(scenario_rel);
         REQUIRE_FALSE(fixture.empty());
         ts::Scenario s = ts::load_scenario(fixture);
         REQUIRE(s.kind == "tree");
@@ -213,17 +213,17 @@ TEST_CASE("[treegen_leaves_all_species] all species emit leaves per LOD",
     namespace tsp = rynx::test_support;
 
     const char* scenarios[] = {
-        "tools/rynx-treegen/scenarios/c3_oak.json",
-        "tools/rynx-treegen/scenarios/c3_pine.json",
-        "tools/rynx-treegen/scenarios/c3_birch.json",
-        "tools/rynx-treegen/scenarios/c3_maple.json",
+        "scenarios/c3_oak.json",
+        "scenarios/c3_pine.json",
+        "scenarios/c3_birch.json",
+        "scenarios/c3_maple.json",
     };
 
     ts::LodBudget  bark_budget;   // C3 P2 bark diet: 10000 / 4000 / 1200 / 4
     ts::LeafBudget leaf_budget;   // C3 P3 retune: 8000 / 5000 / 4000 / 0
 
     for (const char* scenario_rel : scenarios) {
-        const auto fixture = tsp::find_repo_file(scenario_rel);
+        const auto fixture = tsp::treegen_file(scenario_rel);
         INFO("fixture=" << fixture);
         REQUIRE_FALSE(fixture.empty());
 

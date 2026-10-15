@@ -22,14 +22,14 @@ TEST_CASE("[treegen_radius_floor] every non-root node radius >= min_branch_radiu
     namespace tsp = rynx::test_support;
 
     const char* scenarios[] = {
-        "tools/rynx-treegen/scenarios/c3_oak.json",
-        "tools/rynx-treegen/scenarios/c3_pine.json",
-        "tools/rynx-treegen/scenarios/c3_birch.json",
-        "tools/rynx-treegen/scenarios/c3_maple.json",
+        "scenarios/c3_oak.json",
+        "scenarios/c3_pine.json",
+        "scenarios/c3_birch.json",
+        "scenarios/c3_maple.json",
     };
 
     for (const char* rel : scenarios) {
-        const auto fixture = tsp::find_repo_file(rel);
+        const auto fixture = tsp::treegen_file(rel);
         REQUIRE_FALSE(fixture.empty());
 
         ts::Scenario s = ts::load_scenario(fixture);
@@ -60,7 +60,7 @@ TEST_CASE("[treegen_trunk_taper] trunk chain tapers linearly from base to crown_
           "[treegen][treegen_trunk_taper]") {
     namespace tsp = rynx::test_support;
 
-    const auto fixture = tsp::find_repo_file("tools/rynx-treegen/scenarios/c3_oak.json");
+    const auto fixture = tsp::treegen_file("scenarios/c3_oak.json");
     REQUIRE_FALSE(fixture.empty());
 
     ts::Scenario s = ts::load_scenario(fixture);
@@ -102,14 +102,14 @@ TEST_CASE("[treegen_lod_count] GLB has 3 LOD meshes (L3 billboard stub suppresse
     namespace tsp = rynx::test_support;
 
     const char* scenarios[] = {
-        "tools/rynx-treegen/scenarios/c3_oak.json",
-        "tools/rynx-treegen/scenarios/c3_pine.json",
-        "tools/rynx-treegen/scenarios/c3_birch.json",
-        "tools/rynx-treegen/scenarios/c3_maple.json",
+        "scenarios/c3_oak.json",
+        "scenarios/c3_pine.json",
+        "scenarios/c3_birch.json",
+        "scenarios/c3_maple.json",
     };
 
     for (const char* rel : scenarios) {
-        const auto fixture = tsp::find_repo_file(rel);
+        const auto fixture = tsp::treegen_file(rel);
         REQUIRE_FALSE(fixture.empty());
 
         ts::Scenario s = ts::load_scenario(fixture);

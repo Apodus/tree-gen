@@ -51,7 +51,7 @@ struct SpeciesFixture {
 SpeciesFixture load_species(const char* scenario_rel) {
     namespace tsp = rynx::test_support;
     SpeciesFixture f;
-    f.path = tsp::find_repo_file(scenario_rel);
+    f.path = tsp::treegen_file(scenario_rel);
     REQUIRE_FALSE(f.path.empty());
     f.scenario = ts::load_scenario(f.path);
     REQUIRE(f.scenario.kind == "tree");
@@ -76,10 +76,10 @@ std::vector<int> child_counts(const ts::TreeSkeleton& skel) {
 TEST_CASE("[treegen_collar_coverage] collar rings sit strictly between parent rim and child tube",
           "[treegen][treegen_collar_coverage]") {
     const char* scenarios[] = {
-        "tools/rynx-treegen/scenarios/c3_oak.json",
-        "tools/rynx-treegen/scenarios/c3_pine.json",
-        "tools/rynx-treegen/scenarios/c3_birch.json",
-        "tools/rynx-treegen/scenarios/c3_maple.json",
+        "scenarios/c3_oak.json",
+        "scenarios/c3_pine.json",
+        "scenarios/c3_birch.json",
+        "scenarios/c3_maple.json",
     };
 
     for (const char* rel : scenarios) {
@@ -185,10 +185,10 @@ TEST_CASE("[treegen_collar_coverage] collar rings sit strictly between parent ri
 TEST_CASE("[treegen_collar_coverage] at least 2 collar rings per child per fork",
           "[treegen][treegen_collar_coverage]") {
     const char* scenarios[] = {
-        "tools/rynx-treegen/scenarios/c3_oak.json",
-        "tools/rynx-treegen/scenarios/c3_pine.json",
-        "tools/rynx-treegen/scenarios/c3_birch.json",
-        "tools/rynx-treegen/scenarios/c3_maple.json",
+        "scenarios/c3_oak.json",
+        "scenarios/c3_pine.json",
+        "scenarios/c3_birch.json",
+        "scenarios/c3_maple.json",
     };
 
     for (const char* rel : scenarios) {
@@ -224,10 +224,10 @@ TEST_CASE("[treegen_collar_coverage] at least 2 collar rings per child per fork"
 TEST_CASE("[treegen_collar_coverage] collar ring N matches parent rim N",
           "[treegen][treegen_collar_coverage]") {
     const char* scenarios[] = {
-        "tools/rynx-treegen/scenarios/c3_oak.json",
-        "tools/rynx-treegen/scenarios/c3_pine.json",
-        "tools/rynx-treegen/scenarios/c3_birch.json",
-        "tools/rynx-treegen/scenarios/c3_maple.json",
+        "scenarios/c3_oak.json",
+        "scenarios/c3_pine.json",
+        "scenarios/c3_birch.json",
+        "scenarios/c3_maple.json",
     };
 
     for (const char* rel : scenarios) {
@@ -294,10 +294,10 @@ TEST_CASE("[treegen_collar_coverage] collar ring N matches parent rim N",
 TEST_CASE("[treegen_crotch_fill] fork blend adds geometry at multi-child forks",
           "[treegen][treegen_crotch_fill]") {
     const char* scenarios[] = {
-        "tools/rynx-treegen/scenarios/c3_oak.json",
-        "tools/rynx-treegen/scenarios/c3_pine.json",
-        "tools/rynx-treegen/scenarios/c3_birch.json",
-        "tools/rynx-treegen/scenarios/c3_maple.json",
+        "scenarios/c3_oak.json",
+        "scenarios/c3_pine.json",
+        "scenarios/c3_birch.json",
+        "scenarios/c3_maple.json",
     };
 
     for (const char* rel : scenarios) {
@@ -339,10 +339,10 @@ TEST_CASE("[treegen_crotch_fill] fork blend adds geometry at multi-child forks",
 TEST_CASE("[treegen_crotch_fill] every multi-child fork has collar geometry",
           "[treegen][treegen_crotch_fill]") {
     const char* scenarios[] = {
-        "tools/rynx-treegen/scenarios/c3_oak.json",
-        "tools/rynx-treegen/scenarios/c3_pine.json",
-        "tools/rynx-treegen/scenarios/c3_birch.json",
-        "tools/rynx-treegen/scenarios/c3_maple.json",
+        "scenarios/c3_oak.json",
+        "scenarios/c3_pine.json",
+        "scenarios/c3_birch.json",
+        "scenarios/c3_maple.json",
     };
 
     for (const char* rel : scenarios) {

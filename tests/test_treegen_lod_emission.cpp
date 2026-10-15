@@ -58,7 +58,7 @@ std::string tmp_path(const char* suffix) {
 }
 
 // Pack the 4 LODs into a multi-mesh GLB on disk; returns the path. Mirrors
-// the wiring in tools/rynx-treegen/main.cpp.
+// the wiring in main.cpp.
 std::string write_lod_glb(const std::vector<ts::LodOutput>& lods, const char* suffix) {
     std::vector<std::vector<ts::PrimitiveData>> per_lod_prims(lods.size());
     std::vector<ts::MeshData>                    meshes;
@@ -99,7 +99,7 @@ TEST_CASE("[treegen_lod_emission] oak emits 3 LODs in one multi-mesh GLB",
     namespace tsp = rynx::test_support;
     namespace fs  = std::filesystem;
 
-    const auto fixture = tsp::find_repo_file("tools/rynx-treegen/scenarios/c3_oak.json");
+    const auto fixture = tsp::treegen_file("scenarios/c3_oak.json");
     REQUIRE_FALSE(fixture.empty());
 
     ts::Scenario s = ts::load_scenario(fixture);
@@ -209,7 +209,7 @@ TEST_CASE("[treegen_lod_emission] oak emits 3 LODs in one multi-mesh GLB",
 TEST_CASE("[treegen_lod_emission] face_budget allocator stays within budget on oak",
           "[treegen][treegen_lod_emission]") {
     namespace tsp = rynx::test_support;
-    const auto fixture = tsp::find_repo_file("tools/rynx-treegen/scenarios/c3_oak.json");
+    const auto fixture = tsp::treegen_file("scenarios/c3_oak.json");
     REQUIRE_FALSE(fixture.empty());
 
     ts::Scenario s = ts::load_scenario(fixture);
@@ -263,7 +263,7 @@ TEST_CASE("[treegen_branch_merge] merged branches suppress bark but retain leave
           "[treegen][treegen_branch_merge]") {
     namespace tsp = rynx::test_support;
 
-    const auto fixture = tsp::find_repo_file("tools/rynx-treegen/scenarios/c3_oak.json");
+    const auto fixture = tsp::treegen_file("scenarios/c3_oak.json");
     REQUIRE_FALSE(fixture.empty());
 
     ts::Scenario s = ts::load_scenario(fixture);
@@ -429,7 +429,7 @@ TEST_CASE("[treegen_branch_merge] merge cascade prunes empty fork zones",
           "[treegen][treegen_branch_merge]") {
     namespace tsp = rynx::test_support;
 
-    const auto fixture = tsp::find_repo_file("tools/rynx-treegen/scenarios/c3_oak.json");
+    const auto fixture = tsp::treegen_file("scenarios/c3_oak.json");
     REQUIRE_FALSE(fixture.empty());
 
     ts::Scenario s = ts::load_scenario(fixture);

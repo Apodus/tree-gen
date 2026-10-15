@@ -28,7 +28,7 @@ namespace ts = treegen;
 TEST_CASE("[treegen_fork_blend_no_tjunction] no edge has more than 2 adjacent triangles",
           "[treegen][treegen_fork_blend_no_tjunction]") {
     namespace tsp = rynx::test_support;
-    const auto fixture = tsp::find_repo_file("tools/rynx-treegen/scenarios/c3_oak.json");
+    const auto fixture = tsp::treegen_file("scenarios/c3_oak.json");
     REQUIRE_FALSE(fixture.empty());
 
     ts::Scenario s = ts::load_scenario(fixture);
@@ -77,8 +77,8 @@ TEST_CASE("[treegen_fork_blend_no_tjunction] all four species are manifold after
     const char* species[] = { "c3_oak.json", "c3_pine.json", "c3_birch.json", "c3_maple.json" };
 
     for (const char* sp : species) {
-        const std::string path = std::string("tools/rynx-treegen/scenarios/") + sp;
-        const auto fixture = tsp::find_repo_file(path);
+        const std::string path = std::string("scenarios/") + sp;
+        const auto fixture = tsp::treegen_file(path);
         REQUIRE_FALSE(fixture.empty());
 
         ts::Scenario s = ts::load_scenario(fixture);
@@ -115,7 +115,7 @@ TEST_CASE("[treegen_fork_blend_no_tjunction] apply_fork_blend=false matches P1 b
     // mutation). With it on, additional tris are appended and child first
     // rings are snapped — tri count strictly increases or matches.
     namespace tsp = rynx::test_support;
-    const auto fixture = tsp::find_repo_file("tools/rynx-treegen/scenarios/c3_oak.json");
+    const auto fixture = tsp::treegen_file("scenarios/c3_oak.json");
     REQUIRE_FALSE(fixture.empty());
     ts::Scenario s = ts::load_scenario(fixture);
     ts::TreeSkeleton skel = ts::grow_skeleton(s.tree, 42ull ^ s.scenario_fnv);

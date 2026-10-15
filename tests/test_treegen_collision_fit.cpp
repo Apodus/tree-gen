@@ -23,10 +23,10 @@ struct SpeciesFixture {
 };
 
 constexpr std::array<SpeciesFixture, 4> k_species = {{
-    {"tools/rynx-treegen/scenarios/c3_oak.json",   "oak"},
-    {"tools/rynx-treegen/scenarios/c3_pine.json",  "pine"},
-    {"tools/rynx-treegen/scenarios/c3_birch.json", "birch"},
-    {"tools/rynx-treegen/scenarios/c3_maple.json", "maple"},
+    {"scenarios/c3_oak.json",   "oak"},
+    {"scenarios/c3_pine.json",  "pine"},
+    {"scenarios/c3_birch.json", "birch"},
+    {"scenarios/c3_maple.json", "maple"},
 }};
 
 } // anonymous namespace
@@ -36,7 +36,7 @@ TEST_CASE("treegen_collision_fit: all species produce valid trunk capsule",
     namespace ts = rynx::test_support;
 
     for (const auto& sp : k_species) {
-        const auto fixture = ts::find_repo_file(sp.scenario_path);
+        const auto fixture = ts::treegen_file(sp.scenario_path);
         INFO("species=" << sp.label << " fixture=" << fixture);
         REQUIRE_FALSE(fixture.empty());
 

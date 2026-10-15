@@ -32,7 +32,7 @@ TEST_CASE("treegen_skeleton: deterministic across runs on c3_oak fixture",
           "[treegen][treegen_skeleton][treegen_skeleton_determinism]") {
     namespace ts = rynx::test_support;
 
-    const auto fixture = ts::find_repo_file("tools/rynx-treegen/scenarios/c3_oak.json");
+    const auto fixture = ts::treegen_file("scenarios/c3_oak.json");
     INFO("fixture=" << fixture);
     REQUIRE_FALSE(fixture.empty());
 
@@ -60,7 +60,7 @@ TEST_CASE("treegen_skeleton: topology invariants on c3_oak fixture",
           "[treegen][treegen_skeleton][treegen_skeleton_topology]") {
     namespace ts = rynx::test_support;
 
-    const auto fixture = ts::find_repo_file("tools/rynx-treegen/scenarios/c3_oak.json");
+    const auto fixture = ts::treegen_file("scenarios/c3_oak.json");
     REQUIRE_FALSE(fixture.empty());
 
     treegen::Scenario s = treegen::load_scenario(fixture);
@@ -129,7 +129,7 @@ TEST_CASE("treegen_skeleton: every node inside envelope (modulo tip overshoot)",
           "[treegen][treegen_skeleton][treegen_skeleton_envelope]") {
     namespace ts = rynx::test_support;
 
-    const auto fixture = ts::find_repo_file("tools/rynx-treegen/scenarios/c3_oak.json");
+    const auto fixture = ts::treegen_file("scenarios/c3_oak.json");
     REQUIRE_FALSE(fixture.empty());
     treegen::Scenario s = treegen::load_scenario(fixture);
 
@@ -207,7 +207,7 @@ TEST_CASE("treegen_skeleton: strong +X phototropism biases mean tip X-coord posi
           "[treegen][treegen_skeleton][treegen_skeleton_tropism_bias]") {
     namespace ts = rynx::test_support;
 
-    const auto fixture = ts::find_repo_file("tools/rynx-treegen/scenarios/c3_oak.json");
+    const auto fixture = ts::treegen_file("scenarios/c3_oak.json");
     REQUIRE_FALSE(fixture.empty());
     treegen::Scenario s = treegen::load_scenario(fixture);
 

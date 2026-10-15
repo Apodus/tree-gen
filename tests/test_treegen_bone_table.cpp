@@ -45,7 +45,7 @@ constexpr int kStride = ts::K_FLOATS_PER_BONE;
 
 ts::TreeSkeleton grow_oak() {
     namespace tsp = rynx::test_support;
-    const auto fixture = tsp::find_repo_file("tools/rynx-treegen/scenarios/c3_oak.json");
+    const auto fixture = tsp::treegen_file("scenarios/c3_oak.json");
     REQUIRE_FALSE(fixture.empty());
     ts::Scenario s = ts::load_scenario(fixture);
     REQUIRE(s.kind == "tree");
@@ -153,7 +153,7 @@ std::string extract_json(const std::vector<char>& glb) {
 // production path main.cpp drives). Stashes the grown skeleton out-param.
 std::vector<ts::LodOutput> emit_oak_lods(ts::TreeSkeleton& skel_out) {
     namespace tsp = rynx::test_support;
-    const auto fixture = tsp::find_repo_file("tools/rynx-treegen/scenarios/c3_oak.json");
+    const auto fixture = tsp::treegen_file("scenarios/c3_oak.json");
     REQUIRE_FALSE(fixture.empty());
     ts::Scenario s = ts::load_scenario(fixture);
     REQUIRE(s.kind == "tree");

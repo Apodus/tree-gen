@@ -39,15 +39,15 @@ inline bool bootstrap_mode() {
     return env && env[0] == '1';
 }
 
-// rynx-treegen <tool_args> --out=<scratch/leaf>. Run from the current
-// directory: --species resolves scenarios against it.
+// rynx-treegen <tool_args> --out=<scratch/leaf>. Run from the scratch
+// directory: the tool finds scenarios from its own location, not the cwd.
 inline std::filesystem::path generate_glb(const std::string& tool_args, std::string_view leaf) {
     namespace fs = std::filesystem;
     const fs::path glb = test_env::scratch(leaf);
     std::ostringstream args;
     args << tool_args << " --out=\"" << glb.string() << "\"";
     const int rc = rynx::test_support::run_exe_in_dir(
-        test_env::treegen_exe().string(), fs::current_path().string(), args.str());
+        test_env::treegen_exe().string(), glb.parent_path().string(), args.str());
     INFO("rynx-treegen " << args.str() << " rc=" << rc);
     REQUIRE(rc == 0);
     REQUIRE(fs::exists(glb));

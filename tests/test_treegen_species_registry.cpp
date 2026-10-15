@@ -26,16 +26,18 @@ TEST_CASE("treegen_species_registry: enumerate returns sorted 4 names",
 
 TEST_CASE("treegen_species_registry: unknown species returns empty path",
           "[treegen][treegen_species_registry]") {
-    REQUIRE(treegen::get_scenario_path("willow").empty());
-    REQUIRE(treegen::get_scenario_path("").empty());
+    const auto& root = rynx::test_support::treegen_root();
+    REQUIRE(treegen::get_scenario_path(root, "willow").empty());
+    REQUIRE(treegen::get_scenario_path(root, "").empty());
 }
 
 TEST_CASE("treegen_species_registry: each species resolves to an existing path",
           "[treegen][treegen_species_registry]") {
     namespace fs = std::filesystem;
+    const auto& root = rynx::test_support::treegen_root();
     for (const auto& name : treegen::get_species_names()) {
         INFO("species=" << name);
-        const std::string path = treegen::get_scenario_path(name);
+        const std::string path = treegen::get_scenario_path(root, name);
         REQUIRE_FALSE(path.empty());
         std::error_code ec;
         REQUIRE(fs::exists(path, ec));
@@ -55,7 +57,8 @@ TEST_CASE("treegen_species_registry: --species oak --seed 42 produces GLB",
 
     std::ostringstream args;
     args << "--species oak --seed 42 --out=\"" << tmp_glb.string() << "\"";
-    const int rc = tsp::run_exe_in_dir(exe.string(), fs::current_path().string(), args.str());
+    // From the scratch directory: the tool finds scenarios from its own location, not the cwd.
+    const int rc = tsp::run_exe_in_dir(exe.string(), tmp_glb.parent_path().string(), args.str());
     INFO("rc=" << rc);
     REQUIRE(rc == 0);
     REQUIRE(fs::exists(tmp_glb));

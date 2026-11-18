@@ -34,6 +34,7 @@ struct SkeletonLedger {
     int stall_side_branches       = 0;  // side branches the stall guard grew (T1)
     int near_pairs_side_vs_earlier = 0; // near pairs: a side branch and a sibling emitted before it (T1)
     int near_pairs_side_vs_later   = 0; // near pairs: a side branch and a later non-side sibling (T1)
+    int stall_guard_retirements    = 0; // retired by the grower's integer progress guard (T1 review F-A)
 };
 
 // Indexed by BarkTriClass.

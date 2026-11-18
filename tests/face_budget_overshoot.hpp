@@ -2,8 +2,9 @@
 //
 // Defect: face_budget's estimator under-counts some skeletons, so the emitted
 // bark exceeds LodBudget. With the grower stall removed (T1) the regrown oaks show
-// it; oak_7 and oak_999 already overshot on main, unseen because the budget
-// cases built seed 42 only. Owner: epic 01M7QJGBAQ3CXEJTSCNR31KHCP. Deleted by
+// it; oak_7 L0, oak_999 L0 and maple_7 L0 (25,033 > 24,000; 22,015 after T1, so
+// no row) already overshot on main, unseen because the budget cases built seed 42
+// only. Owner: epic 01M7QJGBAQ3CXEJTSCNR31KHCP. Deleted by
 // tree-budget T2 (exact budget): its gate is "this table is gone and every tree
 // is within budget".
 //

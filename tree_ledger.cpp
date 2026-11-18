@@ -179,6 +179,7 @@ SkeletonLedger compute_skeleton_ledger(const TreeDescriptor& desc, const TreeSke
     S.attractors_consumed = skel.attractors_consumed;
     S.attractors_stalled  = skel.attractors_stalled;
     S.stall_side_branches = skel.stall_side_branches;
+    S.stall_guard_retirements = skel.stall_guard_retirements;
 
     const size_t N = skel.nodes.size();
     std::vector<std::vector<int>> children(N);
@@ -265,7 +266,8 @@ std::string ledger_json(const TreeLedger& T) {
     put(o, "attractors_stalled", S.attractors_stalled);
     put(o, "stall_side_branches", S.stall_side_branches);
     put(o, "near_pairs_side_vs_earlier", S.near_pairs_side_vs_earlier);
-    put(o, "near_pairs_side_vs_later", S.near_pairs_side_vs_later, false);
+    put(o, "near_pairs_side_vs_later", S.near_pairs_side_vs_later);
+    put(o, "stall_guard_retirements", S.stall_guard_retirements, false);
     o += "},\n\"levels\": [";
     for (size_t i = 0; i < T.levels.size(); ++i) {
         const LevelLedger& L = T.levels[i];

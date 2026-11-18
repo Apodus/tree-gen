@@ -52,6 +52,7 @@ struct TreeSkeleton {
     int                     attractors_stalled  = 0;  // retired by the grower's stall guard (never reached)
     int                     stall_side_branches = 0;  // side branches the stall guard grew
     std::vector<int>        stall_side_nodes;         // their node indices, in emission order
+    int                     stall_guard_retirements = 0;  // retired by the integer progress guard (0 unless floats disagree)
 };
 
 } // namespace treegen

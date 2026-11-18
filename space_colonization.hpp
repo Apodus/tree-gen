@@ -19,4 +19,12 @@ struct TreeSkeleton;
 
 TreeSkeleton grow_skeleton(const TreeDescriptor& desc, uint64_t seed_effective);
 
+namespace test_hooks {
+// Test seam, false everywhere but one test: a stall side branch is not registered as
+// a tip, so its nearest attractor cannot bind to it while the stall branch believes it
+// detached. That is the float disagreement the grower's integer progress guard exists
+// to survive; the test proves the guard ends the run.
+inline bool stall_side_branch_unbindable = false;
+}  // namespace test_hooks
+
 } // namespace treegen

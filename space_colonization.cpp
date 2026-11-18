@@ -168,7 +168,8 @@ TreeSkeleton grow_skeleton(const TreeDescriptor& desc, uint64_t seed_effective) 
     // attractor leaves only for a strictly nearer new tip, or dies), so a group of
     // the same size as at the tip's last emission is the same group, and its
     // primary child would be bit-identical to the last one. Indexed by node; 0 =
-    // not yet emitted.
+    // not yet emitted; n = the group size at the last regular emission; -n = the
+    // group size at the last stall action (the integer progress guard below).
     std::vector<int> last_emit_count;
 
     // Step 3: growth iterations.
@@ -218,7 +219,8 @@ TreeSkeleton grow_skeleton(const TreeDescriptor& desc, uint64_t seed_effective) 
             const vec3 tip_pos = skel.nodes[tip_idx].position;
 
             if (last_emit_count.size() < skel.nodes.size()) last_emit_count.resize(skel.nodes.size(), 0);
-            if (last_emit_count[static_cast<size_t>(tip_idx)] == attr_count) {
+            const int last = last_emit_count[static_cast<size_t>(tip_idx)];
+            if (last == attr_count || last == -attr_count) {
                 // Same group as this tip's last regular emission: the primary child would be
                 // a duplicate. Grow one side branch toward the group's nearest attractor
                 // (pairs[i..j) is sorted by (dist2, halton)); an attractor within half a step
@@ -226,6 +228,19 @@ TreeSkeleton grow_skeleton(const TreeDescriptor& desc, uint64_t seed_effective) 
                 // leaves the group, so the next emission takes the regular path.
                 Attractor&  nearest = attractors[static_cast<size_t>(pairs[i].attractor_index)];
                 const float d2      = pairs[i].dist_sq;
+                if (last == -attr_count) {
+                    // Integer progress guard: the last stall action at this size did not shrink
+                    // the group (the binder and `detached` below are separate float expressions;
+                    // they can disagree by an ulp). Retire unconditionally, so every entry here
+                    // strictly shrinks the group whatever the floats do.
+                    nearest.alive = false;
+                    --alive_count;
+                    ++skel.attractors_stalled;
+                    ++skel.stall_guard_retirements;
+                    i = j;
+                    continue;
+                }
+                last_emit_count[static_cast<size_t>(tip_idx)] = -attr_count;
                 bool detached = false;
                 if (d2 > 0.25f * growth_distance * growth_distance) {
                     const vec3 dir = normalized(nearest.pos - tip_pos);
@@ -238,7 +253,7 @@ TreeSkeleton grow_skeleton(const TreeDescriptor& desc, uint64_t seed_effective) 
                     side.wind_tier      = std::min(3, side.depth / 4);
                     const int side_idx = static_cast<int>(skel.nodes.size());
                     skel.nodes.push_back(side);
-                    new_tips.push_back(side_idx);
+                    if (!test_hooks::stall_side_branch_unbindable) new_tips.push_back(side_idx);
                     ++skel.stall_side_branches;
                     skel.stall_side_nodes.push_back(side_idx);
                     for (size_t k = i; k < j; ++k) {
@@ -360,8 +375,7 @@ TreeSkeleton grow_skeleton(const TreeDescriptor& desc, uint64_t seed_effective) 
 
         // Tips that didn't grow this iteration stay alive (they may pick up
         // attractors in later iters as other branches reshape the field).
-        // Append new children. Cap tip count to avoid runaway with pathologically
-        // dense attractor configurations.
+        // Append new children (there is no tip cap).
         for (int t : new_tips) tips.push_back(t);
 
         ++skel.iterations_run;

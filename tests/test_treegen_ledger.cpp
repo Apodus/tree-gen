@@ -191,7 +191,7 @@ std::vector<std::string> expected_schema_keys(size_t levels) {
         "nodes", "iterations_run", "max_iterations", "attractors_total", "attractors_consumed",
         "coincident_siblings_exact", "coincident_nodes_1mm", "largest_child_count",
         "largest_coincident_stack", "near_sibling_pairs", "attractors_stalled", "stall_side_branches",
-        "near_pairs_side_vs_earlier", "near_pairs_side_vs_later",
+        "near_pairs_side_vs_earlier", "near_pairs_side_vs_later", "stall_guard_retirements",
         "levels",
     };
     for (size_t i = 0; i < levels; ++i) {
@@ -608,6 +608,7 @@ TEST_CASE("[skeleton] G1a no stall on the seed set", "[treegen][skeleton]") {
             CHECK(r.led.iterations_run < r.led.max_iterations);
             CHECK(r.led.largest_child_count <= kids_bound);
             CHECK(r.led.near_pairs_side_vs_earlier == 0);
+            CHECK(r.led.stall_guard_retirements == 0);   // the F-A guard never fires on the seed set
             std::printf("G1a %s seed %3llu near %3d side %2d side_vs_earlier %d side_vs_later %d\n", sp.species,
                         (unsigned long long)r.seed, r.led.near_sibling_pairs, r.led.stall_side_branches,
                         r.led.near_pairs_side_vs_earlier, r.led.near_pairs_side_vs_later);
@@ -615,6 +616,11 @@ TEST_CASE("[skeleton] G1a no stall on the seed set", "[treegen][skeleton]") {
             trees_with_side += r.led.stall_side_branches > 0 ? 1 : 0;
         }
         // Seeds that were stall-free on main grow the same skeleton: their total near pairs are T0's.
+        // The table lists every seed that was stall-free on main (review F-C).
+        const auto listed = std::count_if(std::begin(tbl::k_t0_stall_free_near_pairs),
+            std::end(tbl::k_t0_stall_free_near_pairs),
+            [&](const tbl::StallFreeNearPairs& c) { return std::strcmp(c.species, sp.species) == 0; });
+        CHECK(int(listed) == int(tbl::k_seed_set.size()) - sp.k_t0_stalled_seeds);
         for (const auto& c : tbl::k_t0_stall_free_near_pairs) {
             if (std::strcmp(c.species, sp.species) != 0) continue;
             const auto& rows = seed_set(sp.species);
@@ -643,6 +649,95 @@ TEST_CASE("[ledger] G1g shipped bark within budget or listed", "[treegen][ledger
             budget_check.check(t.species, t.seed, l, t.ledger.levels[size_t(l)].bark_triangles, per_level[l]);
     }
     budget_check.require_every_row_visited();
+}
+
+// G1h (T1 review F-A) — the integer progress guard ends a stall even when the binder and the
+// stall branch disagree. The test seam keeps every stall side branch out of the tip list, so
+// its attractor cannot leave the group although the branch believes it did; only the guard
+// (a second entry at the same group size retires unconditionally) can end the stall.
+TEST_CASE("[skeleton] G1h progress guard survives a binder disagreement", "[treegen][skeleton]") {
+    struct hook_on {
+        hook_on() { ts::test_hooks::stall_side_branch_unbindable = true; }
+        ~hook_on() { ts::test_hooks::stall_side_branch_unbindable = false; }
+    };
+    // kill 0.1 m: a side branch kills nothing at its own distance, so its attractor stays in the
+    // tip's group whenever the seam hides the side branch from the binder (the shipped kill radii
+    // kill it, which is why the shipped trees never need the guard).
+    ts::Scenario s = load_species("oak");
+    s.tree.branching.kill_distance = 0.1f;
+    int guard_total = 0;
+    for (const uint64_t seed : {7ull, 42ull, 123ull, 999ull}) {
+        ts::TreeSkeleton skel;
+        {
+            hook_on h;
+            skel = ts::grow_skeleton(s.tree, seed ^ s.scenario_fnv);
+        }
+        const ts::SkeletonLedger L = ts::compute_skeleton_ledger(s.tree, skel);
+        std::printf("G1h oak kill 0.1 seed %llu iterations %d/%d side %d guard %d retired %d exact %d\n",
+                    (unsigned long long)seed, L.iterations_run, L.max_iterations, L.stall_side_branches,
+                    L.stall_guard_retirements, L.attractors_stalled, L.coincident_siblings_exact);
+        INFO("oak seed " << seed);
+        CHECK(L.coincident_siblings_exact == 0);
+        CHECK(L.iterations_run < L.max_iterations / 4);   // well under: 23-27 on the correct grower
+        guard_total += L.stall_guard_retirements;
+    }
+    CHECK(guard_total > 0);   // the guard is what ended them
+    CHECK_FALSE(ts::test_hooks::stall_side_branch_unbindable);
+}
+
+// G1i (T1 review F-B) — the retire paths run, on descriptors where kill no longer covers them:
+// an attractor within half a step of a tip that no child kills, and low split thresholds.
+TEST_CASE("[skeleton] G1i retire paths on perturbed descriptors", "[treegen][skeleton]") {
+    struct variant { const char* name; float kill; int split; };
+    for (const variant v : {variant{"oak kill 0.1", 0.1f, -1}, variant{"oak kill 0.1 split 2", 0.1f, 2},
+                            variant{"oak split 2", -1.0f, 2}}) {
+        ts::Scenario s = load_species("oak");
+        if (v.kill > 0.0f) s.tree.branching.kill_distance = v.kill;
+        if (v.split > 0) s.tree.branching.min_attractors_to_split = v.split;
+        int retired = 0;
+        for (const uint64_t seed : {0ull, 1ull, 2ull, 3ull}) {
+            const ts::TreeSkeleton skel = ts::grow_skeleton(s.tree, seed ^ s.scenario_fnv);
+            const ts::SkeletonLedger L = ts::compute_skeleton_ledger(s.tree, skel);
+            std::printf("G1i %s seed %llu iterations %d/%d side %d retired %d guard %d exact %d\n", v.name,
+                        (unsigned long long)seed, L.iterations_run, L.max_iterations, L.stall_side_branches,
+                        L.attractors_stalled, L.stall_guard_retirements, L.coincident_siblings_exact);
+            INFO(v.name << " seed " << seed);
+            CHECK(L.coincident_siblings_exact == 0);
+            CHECK(L.iterations_run < L.max_iterations);
+            CHECK(L.stall_guard_retirements == 0);   // resolved by the branch itself, not the guard
+            retired += L.attractors_stalled;
+        }
+        INFO(v.name);
+        if (v.kill > 0.0f) CHECK(retired > 0);   // the half-step retire path ran
+    }
+}
+
+// Positive control for the side-branch near-pair attribution: one parent, a regular child, a
+// side branch, a later regular child; each regular child within the near threshold of the side
+// branch, the two regular children apart.
+TEST_CASE("[ledger] side-branch near pairs on a hand-built skeleton", "[treegen][ledger]") {
+    ts::TreeDescriptor desc;
+    desc.branching.growth_distance = 0.3f;   // near: < 0.075 m
+    ts::TreeSkeleton skel;
+    skel.nodes = {
+        node(-1, {0, 0, 0}, 0.2f, 0),
+        node(0, {0, 0, 1}, 0.1f, 0),
+        node(1, {0.05f, 0, 1.3f}, 0.05f, 0),    // regular, emitted before the side branch
+        node(1, {0.0f, 0, 1.3f}, 0.05f, 1),     // the side branch
+        node(1, {-0.05f, 0, 1.3f}, 0.05f, 0),   // regular, emitted after it
+    };
+    skel.stall_side_nodes    = {3};
+    skel.stall_side_branches = 1;
+    const ts::SkeletonLedger L = ts::compute_skeleton_ledger(desc, skel);
+    CHECK(L.near_sibling_pairs == 2);           // 2-3 and 3-4; 2-4 are 0.1 m apart
+    CHECK(L.near_pairs_side_vs_earlier == 1);
+    CHECK(L.near_pairs_side_vs_later == 1);
+    skel.stall_side_nodes = {};
+    skel.stall_side_branches = 0;
+    const ts::SkeletonLedger N = ts::compute_skeleton_ledger(desc, skel);
+    CHECK(N.near_sibling_pairs == 2);
+    CHECK(N.near_pairs_side_vs_earlier == 0);
+    CHECK(N.near_pairs_side_vs_later == 0);
 }
 
 // G1b — no stacked geometry on the 16 shipped trees, every level.
@@ -705,6 +800,7 @@ TEST_CASE("[ledger] G1d clean skeletons unchanged, stalled skeletons changed", "
         } else {
             ++stalled;
             CHECK(r.skeleton_fnv != r.t0_skeleton_fnv);
+            CHECK(t.fnv != r.t0_skeleton_fnv);   // the generator's value, not only the table's two constants
         }
     }
     CHECK(clean > 0);

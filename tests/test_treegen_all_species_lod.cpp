@@ -16,6 +16,7 @@
 #include "../external/catch2/catch.hpp"
 #include "test_env.hpp"
 
+#include "face_budget_overshoot.hpp"
 #include "test_support_paths.hpp"
 #include "../phash.hpp"
 
@@ -127,7 +128,10 @@ TEST_CASE("[treegen_all_species_lod] all species fit budget and retain silhouett
     const int l1_retain_pct = 60;  // L1 trim more aggressive
     const int l2_retain_pct = 50;  // L2 trim even more
 
-    for (const char* scenario_rel : scenarios) {
+    // G1g: every shipped seed, every level, through the overshoot table's one rule.
+    treegen::face_budget_overshoot::BarkBudgetCheck budget_check("test");
+    for (const char* scenario_rel : scenarios)
+    for (const uint64_t seed : {7ull, 42ull, 123ull, 999ull}) {
         const auto fixture = tsp::treegen_file(scenario_rel);
         REQUIRE_FALSE(fixture.empty());
         ts::Scenario s = ts::load_scenario(fixture);
@@ -135,7 +139,7 @@ TEST_CASE("[treegen_all_species_lod] all species fit budget and retain silhouett
 
         const ts::LodBudget budget = ts::lod_budget_for_species(s.tree.leaves.shape);
 
-        const uint64_t seed_effective = 42ull ^ s.scenario_fnv;
+        const uint64_t seed_effective = seed ^ s.scenario_fnv;
         ts::TreeSkeleton skel = ts::grow_skeleton(s.tree, seed_effective);
         REQUIRE(skel.nodes.size() > 50u);
 
@@ -162,16 +166,16 @@ TEST_CASE("[treegen_all_species_lod] all species fit budget and retain silhouett
         const int l1_floor = std::min<int>(int(ref_l1), (budget.l1_tris * l1_retain_pct) / 100);
         const int l2_floor = std::min<int>(int(ref_l2), (budget.l2_tris * l2_retain_pct) / 100);
 
-        INFO("species=" << s.tree.species
+        INFO("species=" << s.tree.species << " seed=" << seed
             << " L0=" << l0_tris << " L1=" << l1_tris
             << " L2=" << l2_tris
             << " ref(L0/L1/L2)=" << ref_l0 << "/" << ref_l1 << "/" << ref_l2
             << " floor(L0/L1/L2)=" << l0_floor << "/" << l1_floor << "/" << l2_floor);
 
-        // ---- Budget compliance (over-budget would defeat the LOD intent) ----
-        REQUIRE(int(l0_tris) <= budget.l0_tris);
-        REQUIRE(int(l1_tris) <= budget.l1_tris);
-        REQUIRE(int(l2_tris) <= budget.l2_tris);
+        // ---- Budget compliance (over-budget would defeat the LOD intent), or the listed overshoot ----
+        budget_check.check(s.tree.species, seed, 0, int(l0_tris), budget.l0_tris);
+        budget_check.check(s.tree.species, seed, 1, int(l1_tris), budget.l1_tris);
+        budget_check.check(s.tree.species, seed, 2, int(l2_tris), budget.l2_tris);
 
         // ---- Silhouette retention (the C4 P5 fix) ----
         // Trunk-only-stick failure mode reports ~33 tris; the floor is at
@@ -187,8 +191,9 @@ TEST_CASE("[treegen_all_species_lod] all species fit budget and retain silhouett
 
         // ---- Determinism: rebuild → byte-identical GLB ----
         auto lods2 = ts::emit_all_lods(skel, base_opts, budget, s.tree.height_m, seed_effective);
-        const std::string path_a = write_lod_glb(lods,  s.tree.species.c_str());
-        const std::string path_b = write_lod_glb(lods2, (s.tree.species + "2").c_str());
+        const std::string tag = s.tree.species + std::to_string(seed);
+        const std::string path_a = write_lod_glb(lods,  tag.c_str());
+        const std::string path_b = write_lod_glb(lods2, (tag + "b").c_str());
         const std::vector<char> bytes_a = slurp_bytes(path_a);
         const std::vector<char> bytes_b = slurp_bytes(path_b);
         REQUIRE(bytes_a == bytes_b);
@@ -197,6 +202,7 @@ TEST_CASE("[treegen_all_species_lod] all species fit budget and retain silhouett
         fs::remove(path_a, ec);
         fs::remove(path_b, ec);
     }
+    budget_check.require_every_row_visited();
 }
 
 // [treegen_leaves_all_species] — C5 P4. Uniform per-LOD leaf invariants across

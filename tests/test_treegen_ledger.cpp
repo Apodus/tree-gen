@@ -1,9 +1,10 @@
 // [ledger] — T0 geometry ledger (tree-budget plan, phase T0).
 //
 // G0a classes, nodes and diameter bins are counted right (plus hand-placed edge
-// and leaf-host arms); G0b the stall detector; G0c the premise check
-// over the 16 shipped trees; G0d the 36-seed baselines; G0e fingerprints and
-// vertex sums; G0f the schema. The shipped trees are built in-process exactly as
+// and leaf-host arms); G0b the stall detector; G0c the premise record
+// over the 16 shipped trees; G0d the 36-seed record; G0f the schema. T1 (grower
+// stall): G1a-G1f; T1 deleted G0e (its pins moved to G1d and G1f) and the
+// generator-matching arms of G0c and G0d. The shipped trees are built in-process exactly as
 // main.cpp builds them (a case below byte-compares this mirror's ledger with the
 // tool's --ledger output). Baselines: shipped_tree_table.hpp.
 
@@ -11,9 +12,11 @@
 #include "test_env.hpp"
 #include "test_support_paths.hpp"
 
+#include "face_budget_overshoot.hpp"
 #include "shipped_tree_table.hpp"
 
 #include "../branch_mesh.hpp"
+#include "../collision_fit.hpp"
 #include "../det_rng.hpp"
 #include "../face_budget.hpp"
 #include "../leaf_budget.hpp"
@@ -187,7 +190,8 @@ std::vector<std::string> expected_schema_keys(size_t levels) {
         "schema", "skeleton",
         "nodes", "iterations_run", "max_iterations", "attractors_total", "attractors_consumed",
         "coincident_siblings_exact", "coincident_nodes_1mm", "largest_child_count",
-        "largest_coincident_stack", "near_sibling_pairs",
+        "largest_coincident_stack", "near_sibling_pairs", "attractors_stalled", "stall_side_branches",
+        "near_pairs_side_vs_earlier", "near_pairs_side_vs_later",
         "levels",
     };
     for (size_t i = 0; i < levels; ++i) {
@@ -475,19 +479,23 @@ TEST_CASE("[ledger] tool --ledger without --out exits 2", "[ledger]") {  // spaw
 }
 
 // ---------------------------------------------------------------------------
-// G0c — premise check and stop rule over the 16 shipped trees.
+// G0c — premise record over the 16 shipped trees. T1 rewrote it: arm (i) reads
+// the frozen column (the stall existed on main); the live (i) and arm (iv)
+// ("max_iterations implies a stall", true only of the stalled grower) are gone,
+// replaced by G1a.
 // ---------------------------------------------------------------------------
 TEST_CASE("[ledger] G0c shipped trees: stall premise", "[treegen][ledger]") {
     const auto& trees = shipped();
     REQUIRE(trees.size() == 16u);
 
-    std::printf("G0c species   seed  nodes iters/max  exact  1mm stack kids near consumed | per level: bark(tube/tip/collar/crotch) coinc(tube/tip/collar/crotch) open nonmanifold leaf_t leaf_v hosts maxhost area distinct\n");
+    std::printf("G0c species   seed  nodes iters/max  exact  1mm stack kids near consumed side retired | per level: bark(tube/tip/collar/crotch) coinc(tube/tip/collar/crotch) open nonmanifold leaf_t leaf_v hosts maxhost area distinct\n");
     for (const auto& t : trees) {
         const auto& S = t.ledger.skeleton;
-        std::printf("G0c %-6s %5llu %6d %5d/%-3d %6d %4d %5d %4d %4d %8d\n", t.species.c_str(),
+        std::printf("G0c %-6s %5llu %6d %5d/%-3d %6d %4d %5d %4d %4d %8d %4d %4d\n", t.species.c_str(),
                     (unsigned long long)t.seed, S.nodes, S.iterations_run, S.max_iterations,
                     S.coincident_siblings_exact, S.coincident_nodes_1mm, S.largest_coincident_stack,
-                    S.largest_child_count, S.near_sibling_pairs, S.attractors_consumed);
+                    S.largest_child_count, S.near_sibling_pairs, S.attractors_consumed,
+                    S.stall_side_branches, S.attractors_stalled);
         for (size_t l = 0; l < t.ledger.levels.size(); ++l) {
             const auto& L = t.ledger.levels[l];
             std::printf("G0c     L%zu bark %6d (%d/%d/%d/%d) v %6d coinc (%d/%d/%d/%d) open %5d nonman %4d "
@@ -505,128 +513,237 @@ TEST_CASE("[ledger] G0c shipped trees: stall premise", "[treegen][ledger]") {
         }
     }
 
-    // (i) asserts: the stall exists on a shipped tree. If this is red, T1 is dropped.
+    // (i) asserts on the frozen column: a shipped tree had more than 100 coincident siblings on main.
     int worst = 0;
-    for (const auto& t : trees) worst = std::max(worst, t.ledger.skeleton.coincident_siblings_exact);
-    INFO("largest coincident_siblings_exact on a shipped tree: " << worst);
+    for (const auto& r : tbl::k_rows) worst = std::max(worst, r.t0_coincident_siblings_exact);
     CHECK(worst > 100);
 
-    // (ii) prints: the clean set (expected birch 7/42/123/999, maple 42, pine 7/999).
-    std::printf("G0c (ii) clean:");
-    for (const auto& t : trees) if (is_clean(t)) std::printf(" %s_%llu", t.species.c_str(), (unsigned long long)t.seed);
-    std::printf("\nG0c (ii) stalled:");
-    for (const auto& t : trees) if (!is_clean(t)) std::printf(" %s_%llu", t.species.c_str(), (unsigned long long)t.seed);
-    std::printf("\n");
+    // (ii) prints: trees with a coincident sibling (none, after T1).
+    std::printf("G0c (ii) trees with a coincident sibling:");
+    int with_sibling = 0;
+    for (const auto& t : trees)
+        if (!is_clean(t)) { ++with_sibling; std::printf(" %s_%llu", t.species.c_str(), (unsigned long long)t.seed); }
+    std::printf(with_sibling ? "\n" : " none\n");
 
-    // (iii) prints: collar + crotch share of L0 bark on every clean tree.
+    // (iii) prints: collar + crotch share of L0 bark.
     for (const auto& t : trees) {
-        if (!is_clean(t)) continue;
         const auto& L = t.ledger.levels[0];
         std::printf("G0c (iii) %s_%llu L0 collar+crotch %d of %d = %.1f%%\n", t.species.c_str(),
                     (unsigned long long)t.seed, L.by_class[2] + L.by_class[3], L.bark_triangles,
                     100.0 * (L.by_class[2] + L.by_class[3]) / std::max(1, L.bark_triangles));
     }
-
-    // (iv) asserts the proven direction: a run that hit max_iterations re-emitted a
-    // bit-identical child. Prints transient stalls (coincident siblings, ended early).
-    for (const auto& t : trees) {
-        const auto& S = t.ledger.skeleton;
-        INFO(t.species << "_" << t.seed << " iterations " << S.iterations_run << "/" << S.max_iterations
-                       << " exact " << S.coincident_siblings_exact);
-        if (S.iterations_run == S.max_iterations) CHECK(S.coincident_siblings_exact > 0);
-        if (S.coincident_siblings_exact > 0 && S.iterations_run < S.max_iterations)
-            std::printf("G0c (iv) transient: %s_%llu\n", t.species.c_str(), (unsigned long long)t.seed);
-    }
 }
 
 // ---------------------------------------------------------------------------
-// G0d — 36-seed baselines for T1 ([pin]).
+// G0d — the 36-seed record. T1 deleted its "the generator matches" arms: the
+// k_t0_ constants stay frozen as what G1a and G1c compare against. What is
+// left asserts the table's own rule for a species with no stall-free seed.
 // ---------------------------------------------------------------------------
 TEST_CASE("[ledger] G0d seed-set skeleton baselines", "[treegen][ledger]") {
     for (const auto& sp : tbl::k_species) {
         const auto& rows = seed_set(sp.species);
         REQUIRE(rows.size() == tbl::k_seed_set.size());
-        int stalled = 0, max_children = 0, max_near = 0;
-        long long consumed = 0;
-        bool any_clean = false;
-        std::printf("G0d %s stalled seeds:", sp.species);
-        for (const auto& r : rows) {
-            consumed += r.led.attractors_consumed;
-            if (r.led.coincident_siblings_exact > 0) {
-                ++stalled;
-                std::printf(" %llu", (unsigned long long)r.seed);
-            } else {
-                any_clean = true;
-                max_children = std::max(max_children, r.led.largest_child_count);
-                max_near     = std::max(max_near, r.led.near_sibling_pairs);
-            }
-        }
-        std::printf("\n");
         for (const auto& r : rows)
-            std::printf("G0d %s seed %3llu nodes %5d iters %3d/%d exact %4d stack %4d kids %4d near %3d consumed %4d/%d\n",
+            std::printf("G0d %s seed %3llu nodes %5d iters %3d/%d exact %4d stack %4d kids %4d near %3d consumed %4d/%d side %3d retired %3d\n",
                         sp.species, (unsigned long long)r.seed, r.led.nodes, r.led.iterations_run,
                         r.led.max_iterations, r.led.coincident_siblings_exact, r.led.largest_coincident_stack,
                         r.led.largest_child_count, r.led.near_sibling_pairs, r.led.attractors_consumed,
-                        r.led.attractors_total);
-        std::printf("G0d TABLE {\"%s\", %d, %d, %d, %lld}%s\n", sp.species, stalled, max_children, max_near, consumed,
-                    any_clean ? "" : "  (no stall-free seed: maxima taken from the other species)");
-        INFO("species " << sp.species);
-        CHECK(stalled == sp.k_t0_stalled_seeds);
-        CHECK(consumed == sp.k_t0_consumed_sum);
-        if (any_clean) {
-            CHECK(max_children == sp.k_t0_max_children);
-            CHECK(max_near == sp.k_t0_max_near_pairs);
-        } else {
-            // The plan's rule: the largest value of the other three species.
-            int kids = 0, near = 0;
+                        r.led.attractors_total, r.led.stall_side_branches, r.led.attractors_stalled);
+        if (sp.k_t0_stalled_seeds == int(tbl::k_seed_set.size())) {
+            // No stall-free seed on main: the plan's rule, the largest value of the other three species.
+            int kids = 0, near_pairs = 0;
             for (const auto& o : tbl::k_species) {
                 if (std::strcmp(o.species, sp.species) == 0) continue;
                 kids = std::max(kids, o.k_t0_max_children);
-                near = std::max(near, o.k_t0_max_near_pairs);
+                near_pairs = std::max(near_pairs, o.k_t0_max_near_pairs);
             }
+            INFO("species " << sp.species);
             CHECK(sp.k_t0_max_children == kids);
-            CHECK(sp.k_t0_max_near_pairs == near);
+            CHECK(sp.k_t0_max_near_pairs == near_pairs);
         }
     }
 }
 
 // ---------------------------------------------------------------------------
-// G0e — fingerprints and sums ([pin]; hold by construction in T0).
+// T1 — grower stall. "Clean" and "stalled" are the frozen T0 rows
+// (t0_coincident_siblings_exact == 0 or not).
 // ---------------------------------------------------------------------------
-TEST_CASE("[ledger] G0e shipped fingerprints and vertex sums", "[treegen][ledger]") {
+namespace {
+bool t0_clean(const tbl::Row& r) { return r.t0_coincident_siblings_exact == 0; }
+
+const tbl::SpeciesRow& species_row(const std::string& species) {
+    for (const auto& sp : tbl::k_species) if (species == sp.species) return sp;
+    FAIL("no species row " << species);
+    return tbl::k_species[0];
+}
+}  // namespace
+
+// G1a — no stall anywhere: 4 species x the 36 seeds.
+TEST_CASE("[skeleton] G1a no stall on the seed set", "[treegen][skeleton]") {
+    long long side_total = 0;
+    int trees_with_side = 0;
+    for (const auto& sp : tbl::k_species) {
+        const ts::Scenario s = load_species(sp.species);
+        const float g = s.tree.branching.growth_distance, kill = s.tree.branching.kill_distance;
+        // Side-branch separation from EARLIER siblings (ruling R-T1-near). A side branch S grows
+        // toward attractor a at distance d > g/2 from the tip: |S - a| = |d - g|. An earlier
+        // sibling X was emitted while a was in this tip's group (groups only shrink), did not
+        // kill a (|X - a| >= kill) and did not take it from the tip (|X - a| >= d). So
+        // |S - X| >= |X - a| - |S - a| >= g when d >= g, and > kill - g/2 when d < g. With
+        // kill - g/2 above the near threshold g/4 that is never a near pair.
+        INFO(sp.species << " kill " << kill << " step " << g);
+        REQUIRE(kill - 0.5f * g > 0.25f * g);
+        const int m = s.tree.branching.min_attractors_to_split;
+        // A stuck group of n members adds at most n side branches and n - 1 regular children
+        // to one tip; below the split threshold m that is at most 2m - 3.
+        const int kids_bound = sp.k_t0_max_children + 2 * m - 3;
+        for (const auto& r : seed_set(sp.species)) {
+            INFO(sp.species << " seed " << r.seed << " kids " << r.led.largest_child_count << "/" << kids_bound
+                            << " near " << r.led.near_sibling_pairs
+                            << " side_vs_earlier " << r.led.near_pairs_side_vs_earlier
+                            << " side_vs_later " << r.led.near_pairs_side_vs_later
+                            << " iterations " << r.led.iterations_run << "/" << r.led.max_iterations
+                            << " side " << r.led.stall_side_branches << " retired " << r.led.attractors_stalled);
+            CHECK(r.led.coincident_siblings_exact == 0);
+            CHECK(r.led.iterations_run < r.led.max_iterations);
+            CHECK(r.led.largest_child_count <= kids_bound);
+            CHECK(r.led.near_pairs_side_vs_earlier == 0);
+            std::printf("G1a %s seed %3llu near %3d side %2d side_vs_earlier %d side_vs_later %d\n", sp.species,
+                        (unsigned long long)r.seed, r.led.near_sibling_pairs, r.led.stall_side_branches,
+                        r.led.near_pairs_side_vs_earlier, r.led.near_pairs_side_vs_later);
+            side_total += r.led.stall_side_branches;
+            trees_with_side += r.led.stall_side_branches > 0 ? 1 : 0;
+        }
+        // Seeds that were stall-free on main grow the same skeleton: their total near pairs are T0's.
+        for (const auto& c : tbl::k_t0_stall_free_near_pairs) {
+            if (std::strcmp(c.species, sp.species) != 0) continue;
+            const auto& rows = seed_set(sp.species);
+            const auto it = std::find_if(rows.begin(), rows.end(), [&](const SeedRow& r) { return r.seed == c.seed; });
+            REQUIRE(it != rows.end());
+            INFO(sp.species << " stall-free seed " << c.seed);
+            CHECK(it->led.near_sibling_pairs == c.near_sibling_pairs);
+            CHECK(it->led.stall_side_branches == 0);
+        }
+    }
+    // The side-branch arm has a subject.
+    std::printf("G1a side branches over the seed set: %lld on %d trees\n", side_total, trees_with_side);
+    CHECK(side_total > 0);
+    CHECK(trees_with_side > 0);
+}
+
+// G1g (tool options) — the shipped trees as the stage builds them, every level, through the
+// overshoot table's one rule.
+TEST_CASE("[ledger] G1g shipped bark within budget or listed", "[treegen][ledger]") {
+    treegen::face_budget_overshoot::BarkBudgetCheck budget_check("tool");
+    for (const auto& t : shipped()) {
+        const ts::Scenario s = load_species(t.species);
+        const ts::LodBudget budget = ts::lod_budget_for_species(s.tree.leaves.shape);
+        const int per_level[3] = {budget.l0_tris, budget.l1_tris, budget.l2_tris};
+        for (int l = 0; l < 3; ++l)
+            budget_check.check(t.species, t.seed, l, t.ledger.levels[size_t(l)].bark_triangles, per_level[l]);
+    }
+    budget_check.require_every_row_visited();
+}
+
+// G1b — no stacked geometry on the 16 shipped trees, every level.
+TEST_CASE("[ledger] G1b no stacked geometry on the shipped trees", "[treegen][ledger]") {
+    for (const auto& t : shipped()) {
+        for (size_t l = 0; l < t.ledger.levels.size(); ++l) {
+            const auto& L = t.ledger.levels[l];
+            const int host_bound = tbl::k_t0_clean_max_host_vertices[t.strip ? 1 : 0];
+            INFO(t.species << "_" << t.seed << " L" << l);
+            CHECK(L.coincident_triangles[0] == 0);
+            CHECK(L.coincident_triangles[1] == 0);
+            CHECK(L.leaf_max_vertices_on_one_host <= host_bound);
+            // Printed, not asserted: a two-child fork can emit its crotch triangle twice on the
+            // same collar vertices (a fork-blend defect unrelated to the stall).
+            std::printf("G1b %s_%llu L%zu coincident collar %d crotch %d\n", t.species.c_str(),
+                        (unsigned long long)t.seed, l, L.coincident_triangles[2], L.coincident_triangles[3]);
+        }
+    }
+}
+
+// G1c — the fix grows rather than gives up (sums over the seed set).
+TEST_CASE("[skeleton] G1c stalls resolved by growing", "[treegen][skeleton]") {
+    int stalled_seeds = 0;
+    for (const auto& sp : tbl::k_species) stalled_seeds += sp.k_t0_stalled_seeds;
+    REQUIRE(stalled_seeds >= 9);
+    for (const auto& sp : tbl::k_species) {
+        long long side = 0, retired = 0, consumed = 0, total = 0;
+        for (const auto& r : seed_set(sp.species)) {
+            side     += r.led.stall_side_branches;
+            retired  += r.led.attractors_stalled;
+            consumed += r.led.attractors_consumed;
+            total    += r.led.attractors_total;
+        }
+        std::printf("G1c %s side_branches %lld retired %lld (%.4f of attractors) consumed %lld vs t0 %lld\n",
+                    sp.species, side, retired, double(retired) / double(total), consumed, sp.k_t0_consumed_sum);
+        INFO("species " << sp.species);
+        if (sp.k_t0_stalled_seeds > 0) CHECK(side > retired);
+        CHECK(consumed >= sp.k_t0_consumed_sum);
+    }
+}
+
+// G1d — clean trees byte-identical skeletons, stalled trees changed.
+TEST_CASE("[ledger] G1d clean skeletons unchanged, stalled skeletons changed", "[treegen][ledger]") {
     const auto& trees = shipped();
     REQUIRE(trees.size() == tbl::k_rows.size());
+    int clean = 0, stalled = 0;
     for (size_t i = 0; i < trees.size(); ++i) {
         const auto& t = trees[i];
         const auto& r = tbl::k_rows[i];
-        std::printf("G0e TABLE {\"%s\", %llu, 0x%016llxull, 0x%016llxull, %d, %d},\n", t.species.c_str(),
-                    (unsigned long long)t.seed, (unsigned long long)t.fnv, (unsigned long long)t.fnv,
-                    t.ledger.skeleton.coincident_siblings_exact, t.ledger.skeleton.iterations_run);
-        INFO(t.species << "_" << t.seed);
         REQUIRE(t.species == r.species);
         REQUIRE(t.seed == r.seed);
+        std::printf("G1d TABLE {\"%s\", %llu, 0x%016llxull, 0x%016llxull, %d, %d},\n", r.species,
+                    (unsigned long long)r.seed, (unsigned long long)r.t0_skeleton_fnv, (unsigned long long)t.fnv,
+                    r.t0_coincident_siblings_exact, r.t0_iterations_run);
+        INFO(t.species << "_" << t.seed);
         CHECK(t.fnv == r.skeleton_fnv);
-        CHECK(t.fnv == r.t0_skeleton_fnv);
-        CHECK(t.ledger.skeleton.iterations_run == r.t0_iterations_run);
-        CHECK(t.ledger.skeleton.coincident_siblings_exact == r.t0_coincident_siblings_exact);
+        if (t0_clean(r)) {
+            ++clean;
+            CHECK(r.skeleton_fnv == r.t0_skeleton_fnv);
+        } else {
+            ++stalled;
+            CHECK(r.skeleton_fnv != r.t0_skeleton_fnv);
+        }
     }
+    CHECK(clean > 0);
+    CHECK(stalled > 0);
+}
+
+// G1e — collision capsule unchanged ([pin]; holds by construction: scenario constants).
+TEST_CASE("[ledger] G1e collision capsule pinned", "[treegen][ledger]") {
+    for (const auto& r : tbl::k_rows) {
+        const ts::Scenario s = load_species(r.species);
+        const ts::TreeSkeleton skel = ts::grow_skeleton(s.tree, r.seed ^ s.scenario_fnv);
+        const ts::TrunkCapsule cap = ts::compute_trunk_capsule(skel, s.tree);
+        const auto& k = species_row(r.species);
+        INFO(r.species << "_" << r.seed);
+        CHECK(cap.half_length == k.t0_capsule_half_length);
+        CHECK(cap.radius == k.t0_capsule_radius);
+    }
+}
+
+// G1f — not more expensive (R20): per level, summed vertices over the 16 at most main's.
+TEST_CASE("[ledger] G1f shipped vertex sums at most main's", "[treegen][ledger]") {
     for (int l = 0; l < 3; ++l) {
         const long long bark = level_bark_vertex_sum(l), leaf = level_leaf_vertex_sum(l);
-        std::printf("G0e TABLE L%d vertex_sum %lld bark %lld leaf %lld\n", l, bark + leaf, bark, leaf);
+        std::printf("G1f L%d vertex_sum %lld (bark %lld leaf %lld) vs t0 %lld (bark %lld leaf %lld)\n", l,
+                    bark + leaf, bark, leaf, tbl::k_t0_vertex_sum[size_t(l)], tbl::k_t0_bark_vertex_sum[size_t(l)],
+                    tbl::k_t0_leaf_vertex_sum[size_t(l)]);
         INFO("level " << l);
-        CHECK(bark + leaf == tbl::k_t0_vertex_sum[size_t(l)]);
-        CHECK(bark == tbl::k_t0_bark_vertex_sum[size_t(l)]);
-        CHECK(leaf == tbl::k_t0_leaf_vertex_sum[size_t(l)]);
+        CHECK(bark + leaf <= tbl::k_t0_vertex_sum[size_t(l)]);
+        // Positive control: the arm is red against the constant halved.
+        CHECK_FALSE(bark + leaf <= tbl::k_t0_vertex_sum[size_t(l)] / 2);
+        // [pin] the before-state for T2.
+        CHECK(bark + leaf == tbl::k_t1_vertex_sum[size_t(l)]);
     }
-    int clean_max[2] = {0, 0};
-    for (const auto& t : trees) {
-        if (!is_clean(t)) continue;
-        for (const auto& L : t.ledger.levels)
-            clean_max[t.strip ? 1 : 0] = std::max(clean_max[t.strip ? 1 : 0], L.leaf_max_vertices_on_one_host);
-    }
-    std::printf("G0e TABLE clean_max_host_vertices {%d, %d}\n", clean_max[0], clean_max[1]);
-    CHECK(clean_max[0] == tbl::k_t0_clean_max_host_vertices[0]);
-    CHECK(clean_max[1] == tbl::k_t0_clean_max_host_vertices[1]);
+    for (const auto& t : shipped())
+        for (size_t l = 0; l < t.ledger.levels.size(); ++l)
+            std::printf("G1f %s_%llu L%zu bark_t %d bark_v %d leaf_t %d leaf_v %d\n", t.species.c_str(),
+                        (unsigned long long)t.seed, l, t.ledger.levels[l].bark_triangles,
+                        t.ledger.levels[l].bark_vertices, t.ledger.levels[l].leaf_triangles,
+                        t.ledger.levels[l].leaf_vertices);
 }
 
 // ---------------------------------------------------------------------------

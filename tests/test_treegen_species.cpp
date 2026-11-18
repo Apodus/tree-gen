@@ -157,10 +157,12 @@ TEST_CASE("treegen_species: per-species invariants on 4 first-ship fixtures",
         const int tip_count = run_generic_invariants(s, skel1);
         REQUIRE(tip_count >= 1);
 
-        // (c) node-count sanity: ∈ [0.5x, 5x] of attractor_count. Empirically
-        // calibrated against the 4 first-ship fixtures (pine 1.26x, birch
-        // 1.75x, oak 2.80x, maple 3.81x — the split-on-wide-angular-spread
-        // path produces 2-4 nodes per attractor on oblate species). The 5x
+        // (c) node-count sanity: ∈ [0.5x, 5x] of attractor_count. Calibrated
+        // against the 4 first-ship fixtures (pine 1.26x, birch 1.75x, oak
+        // 2.80x, maple 3.81x). Those ratios were NOT the split path's doing:
+        // on those seeds part of the count was the grower stall (hundreds of
+        // bit-identical twigs at one tip, removed in tree-budget T1), so the
+        // band is evidence of nothing about splitting. The 5x
         // ceiling catches a true split-explosion regression with headroom;
         // the 0.5x floor catches a kill-radius regression starving growth.
         // Roadmap spec was [0.5x, 2x]; bumped to [0.5x, 5x] post-empirical-

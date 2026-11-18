@@ -49,6 +49,9 @@ struct TreeSkeleton {
     std::vector<LeafSite>   leaf_sites;   // populated by C5 (empty in C3 P2)
     int                     attractors_consumed = 0;  // stats
     int                     iterations_run      = 0;  // stats
+    int                     attractors_stalled  = 0;  // retired by the grower's stall guard (never reached)
+    int                     stall_side_branches = 0;  // side branches the stall guard grew
+    std::vector<int>        stall_side_nodes;         // their node indices, in emission order
 };
 
 } // namespace treegen

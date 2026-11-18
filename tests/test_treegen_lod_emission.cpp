@@ -10,6 +10,7 @@
 #include "../external/catch2/catch.hpp"
 #include "test_env.hpp"
 
+#include "face_budget_overshoot.hpp"
 #include "test_support_paths.hpp"
 
 #include "../external/gltf_view.hpp"
@@ -140,9 +141,12 @@ TEST_CASE("[treegen_lod_emission] oak emits 3 LODs in one multi-mesh GLB",
     REQUIRE(l0_tris > 0u);
     REQUIRE(l1_tris > 0u);
     REQUIRE(l2_tris > 0u);
-    REQUIRE(int(l0_tris) <= budget.l0_tris);
-    REQUIRE(int(l1_tris) <= budget.l1_tris);
-    REQUIRE(int(l2_tris) <= budget.l2_tris);
+    {
+        treegen::face_budget_overshoot::BarkBudgetCheck budget_check("test");  // G1g
+        budget_check.check("oak", 42, 0, int(l0_tris), budget.l0_tris);
+        budget_check.check("oak", 42, 1, int(l1_tris), budget.l1_tris);
+        budget_check.check("oak", 42, 2, int(l2_tris), budget.l2_tris);
+    }
 
     // Detail descends monotonically L0 -> L2.
     REQUIRE(l0_tris >= l1_tris);
@@ -311,7 +315,7 @@ TEST_CASE("[treegen_branch_merge] merged branches suppress bark but retain leave
         ts::BarkMeshOutput bark = ts::build_bark_mesh(skel, opts);
         const size_t tris = bark.indices_u32.size() / 3;
         INFO("L0: bark_tris=" << tris << " budget=" << budget.l0_tris);
-        REQUIRE(int(tris) <= budget.l0_tris);
+        treegen::face_budget_overshoot::BarkBudgetCheck("test").check("oak", 42, 0, int(tris), budget.l0_tris);  // G1g
     }
 
     // ---- (b-c) L1: merged branches produce zero bark, total ≤ budget ----

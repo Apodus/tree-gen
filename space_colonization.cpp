@@ -164,6 +164,13 @@ TreeSkeleton grow_skeleton(const TreeDescriptor& desc, uint64_t seed_effective) 
     const float crown_height = desc.height_m - crown_base_z;
     const float leader_ceiling = crown_base_z + desc.crown_leader_fraction * crown_height;
 
+    // Stall guard: a tip's attractor group only shrinks (tips never move; an
+    // attractor leaves only for a strictly nearer new tip, or dies), so a group of
+    // the same size as at the tip's last emission is the same group, and its
+    // primary child would be bit-identical to the last one. Indexed by node; 0 =
+    // not yet emitted.
+    std::vector<int> last_emit_count;
+
     // Step 3: growth iterations.
     for (int iter = 0; iter < desc.branching.max_iterations; ++iter) {
         if (alive_count == 0) break;
@@ -197,7 +204,6 @@ TreeSkeleton grow_skeleton(const TreeDescriptor& desc, uint64_t seed_effective) 
 
         // Walk grouped-by-tip ranges. tips iterate in sorted-tip order →
         // deterministic regardless of `tips` insertion sequence.
-        bool made_progress = false;
         std::vector<int> new_tips;
         new_tips.reserve(tips.size());
 
@@ -210,6 +216,48 @@ TreeSkeleton grow_skeleton(const TreeDescriptor& desc, uint64_t seed_effective) 
             // pairs[i..j) all target tip_idx.
             const int attr_count = static_cast<int>(j - i);
             const vec3 tip_pos = skel.nodes[tip_idx].position;
+
+            if (last_emit_count.size() < skel.nodes.size()) last_emit_count.resize(skel.nodes.size(), 0);
+            if (last_emit_count[static_cast<size_t>(tip_idx)] == attr_count) {
+                // Same group as this tip's last regular emission: the primary child would be
+                // a duplicate. Grow one side branch toward the group's nearest attractor
+                // (pairs[i..j) is sorted by (dist2, halton)); an attractor within half a step
+                // cannot be approached by a whole step and is retired instead. Either way it
+                // leaves the group, so the next emission takes the regular path.
+                Attractor&  nearest = attractors[static_cast<size_t>(pairs[i].attractor_index)];
+                const float d2      = pairs[i].dist_sq;
+                bool detached = false;
+                if (d2 > 0.25f * growth_distance * growth_distance) {
+                    const vec3 dir = normalized(nearest.pos - tip_pos);
+                    BranchNode side;
+                    side.parent_index   = tip_idx;
+                    side.position       = tip_pos + dir * growth_distance;
+                    side.axis           = dir;
+                    side.depth          = skel.nodes[static_cast<size_t>(tip_idx)].depth + 1;  // a side branch, as a split is
+                    side.t_along_parent = 1.0f;
+                    side.wind_tier      = std::min(3, side.depth / 4);
+                    const int side_idx = static_cast<int>(skel.nodes.size());
+                    skel.nodes.push_back(side);
+                    new_tips.push_back(side_idx);
+                    ++skel.stall_side_branches;
+                    skel.stall_side_nodes.push_back(side_idx);
+                    for (size_t k = i; k < j; ++k) {
+                        Attractor& a = attractors[static_cast<size_t>(pairs[k].attractor_index)];
+                        if (a.alive && length_squared(a.pos - side.position) < kill_radius_sq) {
+                            a.alive = false;
+                            --alive_count;
+                        }
+                    }
+                    detached = !nearest.alive || length_squared(nearest.pos - side.position) < d2;
+                }
+                if (!detached) {
+                    nearest.alive = false;
+                    --alive_count;
+                    ++skel.attractors_stalled;
+                }
+                i = j;
+                continue;
+            }
 
             // Mean direction toward attractors.
             vec3 mean_dir = {0,0,0};
@@ -264,8 +312,8 @@ TreeSkeleton grow_skeleton(const TreeDescriptor& desc, uint64_t seed_effective) 
             child.t_along_parent = 1.0f;
             child.wind_tier      = std::min(3, child.depth / 4);
             skel.nodes.push_back(child);
+            last_emit_count[static_cast<size_t>(tip_idx)] = attr_count;
             new_tips.push_back(new_idx);
-            made_progress = true;
 
             // Optional split: if enough attractors AND wide angular spread.
             bool did_split = false;
@@ -317,10 +365,10 @@ TreeSkeleton grow_skeleton(const TreeDescriptor& desc, uint64_t seed_effective) 
         for (int t : new_tips) tips.push_back(t);
 
         ++skel.iterations_run;
-        if (!made_progress) break;
     }
 
-    skel.attractors_consumed = static_cast<int>(attractors.size()) - alive_count;
+    // Reached by a node; attractors retired by the stall guard are not counted.
+    skel.attractors_consumed = static_cast<int>(attractors.size()) - alive_count - skel.attractors_stalled;
 
     // Step 4: solve radii.
     solve_radii(skel, desc);

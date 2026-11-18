@@ -7,6 +7,7 @@
 #include "../external/catch2/catch.hpp"
 #include "test_env.hpp"
 
+#include "face_budget_overshoot.hpp"
 #include "test_support_paths.hpp"
 
 #include "../external/gltf_view.hpp"
@@ -171,7 +172,7 @@ TEST_CASE("[treegen_lod_leaves] oak default-budget per-LOD invariants + multi-pr
                                             : leaf_budget.l2_tris;
         INFO("LOD " << i << " bark_tris=" << bark_tris << "/" << bark_budget_L
              << " leaf_tris=" << leaf_tris << "/" << leaf_budget_L);
-        REQUIRE(int(bark_tris) <= bark_budget_L);
+        treegen::face_budget_overshoot::BarkBudgetCheck("test").check("oak", 42, i, int(bark_tris), bark_budget_L);  // G1g
         REQUIRE(int(leaf_tris) <= leaf_budget_L);
     }
 

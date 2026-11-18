@@ -177,6 +177,8 @@ SkeletonLedger compute_skeleton_ledger(const TreeDescriptor& desc, const TreeSke
     S.max_iterations      = desc.branching.max_iterations;
     S.attractors_total    = desc.branching.attractor_count;
     S.attractors_consumed = skel.attractors_consumed;
+    S.attractors_stalled  = skel.attractors_stalled;
+    S.stall_side_branches = skel.stall_side_branches;
 
     const size_t N = skel.nodes.size();
     std::vector<std::vector<int>> children(N);
@@ -197,6 +199,13 @@ SkeletonLedger compute_skeleton_ledger(const TreeDescriptor& desc, const TreeSke
         if (!mm.insert(k).second) ++S.coincident_nodes_1mm;
     }
 
+    require(skel.stall_side_nodes.size() == size_t(skel.stall_side_branches), "stall_side_nodes does not match stall_side_branches");
+    std::vector<uint8_t> is_side(N, 0);
+    for (int n : skel.stall_side_nodes) {
+        require(n > 0 && size_t(n) < N, "stall side node out of range");
+        is_side[size_t(n)] = 1;
+    }
+
     const float near_dist = 0.25f * desc.branching.growth_distance;
     const float near_sq   = near_dist * near_dist;
     for (const auto& kids : children) {
@@ -212,7 +221,11 @@ SkeletonLedger compute_skeleton_ledger(const TreeDescriptor& desc, const TreeSke
             for (size_t b = a + 1; b < kids.size(); ++b) {
                 const vec3 pb = skel.nodes[size_t(kids[b])].position;
                 if (pos_key(pa) == pos_key(pb)) continue;
-                if (length_squared(pa - pb) < near_sq) ++S.near_sibling_pairs;
+                if (length_squared(pa - pb) >= near_sq) continue;
+                ++S.near_sibling_pairs;
+                // kids ascend in node index = emission order: kids[a] was emitted first.
+                if (is_side[size_t(kids[b])]) ++S.near_pairs_side_vs_earlier;
+                else if (is_side[size_t(kids[a])]) ++S.near_pairs_side_vs_later;
             }
         }
     }
@@ -248,7 +261,11 @@ std::string ledger_json(const TreeLedger& T) {
     put(o, "coincident_nodes_1mm", S.coincident_nodes_1mm);
     put(o, "largest_child_count", S.largest_child_count);
     put(o, "largest_coincident_stack", S.largest_coincident_stack);
-    put(o, "near_sibling_pairs", S.near_sibling_pairs, false);
+    put(o, "near_sibling_pairs", S.near_sibling_pairs);
+    put(o, "attractors_stalled", S.attractors_stalled);
+    put(o, "stall_side_branches", S.stall_side_branches);
+    put(o, "near_pairs_side_vs_earlier", S.near_pairs_side_vs_earlier);
+    put(o, "near_pairs_side_vs_later", S.near_pairs_side_vs_later, false);
     o += "},\n\"levels\": [";
     for (size_t i = 0; i < T.levels.size(); ++i) {
         const LevelLedger& L = T.levels[i];

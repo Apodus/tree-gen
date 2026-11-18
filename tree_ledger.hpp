@@ -30,6 +30,10 @@ struct SkeletonLedger {
     int largest_child_count       = 0;
     int largest_coincident_stack  = 1;  // most bitwise-equal siblings under one parent
     int near_sibling_pairs        = 0;  // sibling pairs closer than 0.25 * growth_distance, not bitwise equal
+    int attractors_stalled        = 0;  // retired by the grower's stall guard (T1)
+    int stall_side_branches       = 0;  // side branches the stall guard grew (T1)
+    int near_pairs_side_vs_earlier = 0; // near pairs: a side branch and a sibling emitted before it (T1)
+    int near_pairs_side_vs_later   = 0; // near pairs: a side branch and a later non-side sibling (T1)
 };
 
 // Indexed by BarkTriClass.

@@ -8,7 +8,6 @@
 #include "envelopes.hpp"
 #include "face_budget.hpp"
 #include "glb_writer.hpp"
-#include "impostor_bake.hpp"
 #include "leaf_atlas.hpp"
 #include "leaf_budget.hpp"
 #include "leaf_geometry.hpp"
@@ -24,8 +23,6 @@
 #include "treegen_root.hpp"
 #include "trivial_cylinder.hpp"
 #include "vec3.hpp"
-
-#include <stb_image.h>
 
 #include <algorithm>
 #include <array>
@@ -67,8 +64,8 @@ constexpr std::array<treegen::EnvelopeShape, 5> k_all_envelope_shapes = {
 
 void print_usage() {
     std::fprintf(stderr,
-        "usage: rynx-treegen --scenario=<path> [--seed=<u64>] [--out=<path>] [--dump-skeleton-json=<path>] [--bake-impostor]\n"
-        "       rynx-treegen --species=<name> [--seed=<u64>] [--out=<path>] [--dump-skeleton-json=<path>] [--bake-impostor]\n"
+        "usage: rynx-treegen --scenario=<path> [--seed=<u64>] [--out=<path>] [--dump-skeleton-json=<path>]\n"
+        "       rynx-treegen --species=<name> [--seed=<u64>] [--out=<path>] [--dump-skeleton-json=<path>]\n"
         "       rynx-treegen --list-species\n"
         "       rynx-treegen --print-root\n"
         "       rynx-treegen --list-envelope-shapes\n"
@@ -108,7 +105,6 @@ void print_help() {
         "  --list-species                Print available species names + exit.\n"
         "  --print-root                  Print the repository root found from the exe's location + exit.\n"
         "  --list-envelope-shapes        Print the 5 envelope shape names + exit.\n"
-        "  --bake-impostor               Bake 8-azimuth impostor atlas into L3 GLB image.\n"
         "  -h, --help                    Print this message + scenario index + exit.\n"
         "\n"
         "Both --key=value and --key value forms accepted.\n"
@@ -195,7 +191,6 @@ int main(int argc, char** argv) {
         std::string out_path;
         std::string skeleton_json_path;
         uint64_t    cli_seed = 0;
-        bool        bake_impostor = false;
 
         // --dump-skeleton-json MUST be matched before --dump (prefix-wise the
         // longer key first), and before --scenario (no prefix conflict but
@@ -229,7 +224,6 @@ int main(int argc, char** argv) {
             if (const char* v = match_arg(arg, "--species",  argc, argv, i)) { species_name = v; continue; }
             if (const char* v = match_arg(arg, "--seed",     argc, argv, i)) { cli_seed = parse_u64(v); continue; }
             if (const char* v = match_arg(arg, "--out",      argc, argv, i)) { out_path = v; continue; }
-            if (std::strcmp(arg, "--bake-impostor") == 0) { bake_impostor = true; continue; }
             if (std::strcmp(arg, "-h") == 0 || std::strcmp(arg, "--help") == 0) { print_help(); return 0; }
             std::fprintf(stderr, "rynx-treegen: unknown argument: %s\n", arg);
             print_usage();
@@ -419,64 +413,6 @@ int main(int argc, char** argv) {
                     glb_images.push_back(std::move(lr));  // index 7
                 }
 
-                // C9 P3 — impostor atlas bake. Decodes bark + leaf diffuse PNGs,
-                // rasterizes L0 from 8 azimuths, encodes the atlas as a new
-                // GLB image. L3 billboard material references this image.
-                int impostor_tex_index = -1;
-                if (bake_impostor && lods.size() >= 4) {
-                    treegen::ImpostorInput imp_in{};
-                    // L0 bark mesh.
-                    const auto& l0 = lods[0];
-                    imp_in.positions    = l0.mesh.positions.data();
-                    imp_in.vertex_count = int(l0.mesh.positions.size() / 3);
-                    imp_in.indices      = l0.indices_u32.data();
-                    imp_in.index_count  = int(l0.indices_u32.size());
-                    imp_in.uvs          = l0.mesh.uvs.data();
-
-                    // Decode bark diffuse PNG.
-                    int bw = 0, bh = 0, bc = 0;
-                    stbi_uc* bark_px = stbi_load_from_memory(
-                        glb_images[0].png_bytes.data(), int(glb_images[0].png_bytes.size()),
-                        &bw, &bh, &bc, 4);
-                    imp_in.bark_rgba = bark_px;
-                    imp_in.bark_w    = bw;
-                    imp_in.bark_h    = bh;
-
-                    // Decode leaf diffuse PNG (if present).
-                    stbi_uc* leaf_px = nullptr;
-                    int lw = 0, lh = 0, lc = 0;
-                    if (has_leaves && glb_images.size() > 4) {
-                        leaf_px = stbi_load_from_memory(
-                            glb_images[4].png_bytes.data(), int(glb_images[4].png_bytes.size()),
-                            &lw, &lh, &lc, 4);
-                        imp_in.leaf_rgba = leaf_px;
-                        imp_in.leaf_w    = lw;
-                        imp_in.leaf_h    = lh;
-                    }
-
-                    // L0 leaf mesh (if present).
-                    if (l0.has_leaves) {
-                        imp_in.leaf_positions    = l0.leaf_positions.data();
-                        imp_in.leaf_vertex_count = int(l0.leaf_positions.size() / 3);
-                        imp_in.leaf_indices      = l0.leaf_indices_u32.data();
-                        imp_in.leaf_index_count  = int(l0.leaf_indices_u32.size());
-                        imp_in.leaf_uvs          = l0.leaf_uvs.data();
-                    }
-
-                    auto atlas = treegen::bake_impostor_atlas(imp_in);
-                    if (bark_px) stbi_image_free(bark_px);
-                    if (leaf_px) stbi_image_free(leaf_px);
-
-                    // Encode atlas to PNG and append as GLB image.
-                    treegen::ImageData atlas_img;
-                    atlas_img.png_bytes = treegen::encode_png_rgba8(
-                        atlas.width, atlas.height, atlas.width * 4, atlas.rgba.data());
-                    impostor_tex_index = int(glb_images.size());
-                    glb_images.push_back(std::move(atlas_img));
-                    std::printf("treegen: impostor atlas baked (%dx%d, image index %d)\n",
-                                atlas.width, atlas.height, impostor_tex_index);
-                }
-
                 // Build flat per-LOD PrimitiveData arrays + MeshData wrappers.
                 // Storage lives in vectors so the spans inside MeshData remain
                 // valid until write_glb_multi_mesh returns.
@@ -499,19 +435,11 @@ int main(int argc, char** argv) {
                         lod.bark_bone_index.data(), lod.bark_bone_index.size());
                     bark_prim.bone_blend = std::span<const uint8_t>(
                         lod.bark_bone_blend.data(), lod.bark_bone_blend.size());
-                    // C9 P3 — L3 billboard uses impostor atlas when baked.
-                    if (lod.lod_index == 3 && impostor_tex_index >= 0) {
-                        bark_prim.material.base_color_tex_index = impostor_tex_index;
-                        bark_prim.material.alpha_mode   = "MASK";
-                        bark_prim.material.alpha_cutoff  = 0.5f;
-                        bark_prim.material.sampler_index = 1;  // CLAMP
-                    } else {
-                        bark_prim.material.base_color_tex_index         = 0;
-                        bark_prim.material.normal_tex_index             = 1;
-                        bark_prim.material.occlusion_tex_index          = 2;
-                        bark_prim.material.metallic_roughness_tex_index = 3;
-                        bark_prim.material.sampler_index                = 0;
-                    }
+                    bark_prim.material.base_color_tex_index         = 0;
+                    bark_prim.material.normal_tex_index             = 1;
+                    bark_prim.material.occlusion_tex_index          = 2;
+                    bark_prim.material.metallic_roughness_tex_index = 3;
+                    bark_prim.material.sampler_index                = 0;
                     per_lod_prims[li].push_back(bark_prim);
 
                     if (lod.has_leaves) {

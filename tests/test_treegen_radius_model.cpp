@@ -97,7 +97,7 @@ TEST_CASE("[treegen_trunk_taper] trunk chain tapers linearly from base to crown_
     INFO("trunk_count=" << trunk_count << " max_error=" << max_error);
 }
 
-TEST_CASE("[treegen_lod_count] GLB has 3 LOD meshes (L3 billboard stub suppressed)",
+TEST_CASE("[treegen_lod_count] GLB has 3 LOD meshes",
           "[treegen][treegen_lod_count]") {
     namespace tsp = rynx::test_support;
 

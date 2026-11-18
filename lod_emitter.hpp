@@ -1,15 +1,14 @@
-// C4 P4 + C5 P3 — emit all 4 LODs from one TreeSkeleton.
+// C4 P4 + C5 P3 — emit the 3 mesh LODs from one TreeSkeleton.
 //
 // Per LOD i in {0,1,2}: allocate per-order radial via face_budget, build a
-// bark mesh + fork blend + wind-weight bake. LOD 3 = 4-tri vertical billboard
-// stub (impostor placeholder; C9 bakes the actual impostor texture).
+// bark mesh + fork blend + wind-weight bake.
 //
 // C5 P3: the leaf-aware overload also runs allocate_leaves_all_lods once and,
 // per LOD, materialises per-LOD leaf positions/normals/uvs/indices/wind/material
 // in the same `LodOutput`. main.cpp packages them as a 2nd primitive (leaves)
 // alongside primitive[0] (bark) inside each MeshData.
 //
-// Output is a vector of 4 `LodOutput`s; caller (main.cpp) packs them into a
+// Output is a vector of 3 `LodOutput`s; caller (main.cpp) packs them into a
 // single multi-mesh GLB via glb_writer::write_glb_multi_mesh, one MeshData per
 // LOD with the matching `_RYNX_LOD` extension payload.
 #pragma once
@@ -51,7 +50,7 @@ struct LodOutput {
     // point (the ORIGINAL host node position, 3 floats/vert) — the leaf
     // tumble pivot, pinned to the twig even though the host bone may sit a
     // run away. bone_table_records = decimated table (K_FLOATS_PER_BONE
-    // floats/bone), identical across LODs. Empty for L3 (billboard).
+    // floats/bone), identical across LODs.
     std::vector<uint16_t> bark_bone_index;
     std::vector<uint8_t>  bark_bone_blend;
     std::vector<uint16_t> leaf_bone_index;
@@ -75,8 +74,7 @@ std::vector<LodOutput> emit_all_lods(const TreeSkeleton&     skel,
 // C5 P3 — leaf-aware overload. Same bark pipeline as above; additionally runs
 // allocate_leaves_all_lods over `all_leaf_sites` and materialises per-LOD leaf
 // primitive payloads (positions/normals/uvs/indices/wind/material) inside each
-// LodOutput. L3 stays leafless (matches LeafBudget.l3_tris default = 0 plus the
-// billboard-stub L3 emit).
+// LodOutput.
 //
 // Distinct arity (8 args) — the leaf-blind 5-arg overload is preserved
 // byte-identical for callers that don't need leaves.

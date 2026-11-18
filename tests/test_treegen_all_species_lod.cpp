@@ -144,7 +144,7 @@ TEST_CASE("[treegen_all_species_lod] all species fit budget and retain silhouett
         base_opts.seam_offset_rad = 0.0f;
 
         auto lods = ts::emit_all_lods(skel, base_opts, budget, s.tree.height_m, seed_effective);
-        REQUIRE(lods.size() == 3u);  // C10: L3 billboard stub suppressed
+        REQUIRE(lods.size() == 3u);  // C10: three mesh LODs
 
         const size_t l0_tris = lods[0].indices_u32.size() / 3;
         const size_t l1_tris = lods[1].indices_u32.size() / 3;
@@ -252,7 +252,7 @@ TEST_CASE("[treegen_leaves_all_species] all species emit leaves per LOD",
         auto lods = ts::emit_all_lods(skel, sites, bark_opts, bark_budget,
                                       leaf_budget, leaf_geom_opts,
                                       s.tree.height_m, seed_effective);
-        REQUIRE(lods.size() == 3u);  // C10: L3 billboard stub suppressed
+        REQUIRE(lods.size() == 3u);  // C10: three mesh LODs
 
         const int leaf_budget_per_lod[3] = {
             leaf_budget.l0_tris, leaf_budget.l1_tris, leaf_budget.l2_tris

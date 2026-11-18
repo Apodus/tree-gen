@@ -29,8 +29,7 @@ constexpr float k_lod_fallback_distance_m[3] = { 45.0f, 135.0f, 360.0f };
 // constant: L1 30%*1.4^2 ~ 59%, L2 10%*2.0^2 ~ 40%.
 constexpr float k_lod_leaf_scale[3] = { 1.0f, 1.4f, 2.0f };
 
-// Per-LOD radial targets — L0 is the base; L1 halves; L2 quarters. L3 ignores
-// radial (it's a billboard stub).
+// Per-LOD radial targets — L0 is the base; L1 halves; L2 quarters.
 PerOrderRadial radial_target_for_lod(int lod_index) {
     PerOrderRadial r;  // defaults = {12, 8, 6, 4}
     if (lod_index == 1) {
@@ -105,67 +104,6 @@ LodOutput emit_one_bark_lod(const TreeSkeleton&    skel,
     return lod;
 }
 
-// L3 = 4-tri vertical billboard quad at (0, 0, height/2), sized 1m × height_m.
-// 4 verts, 4 triangles (front + back, each as 2 tris) so the impostor renders
-// from either side. UV [0,1]. Wind weights all zero (impostor doesn't animate).
-LodOutput emit_billboard_stub_lod(float tree_height_m) {
-    LodOutput lod;
-    lod.lod_index          = 3;
-    lod.lod_max_distance_m   = 1000.0f; // billboard far distance fallback
-    lod.lod_screen_height_px = 0.0f;    // billboard = coarsest
-
-    const float h = std::max(0.1f, tree_height_m);
-    const float half_w = 0.5f;        // 1m wide
-    const float z0 = 0.0f;
-    const float z1 = h;
-
-    // 4 verts: (-w, 0, 0), (+w, 0, 0), (+w, 0, h), (-w, 0, h). Y-axis is the
-    // billboard normal (camera-faceable later).
-    lod.mesh.positions = {
-        -half_w, 0.0f, z0,
-         half_w, 0.0f, z0,
-         half_w, 0.0f, z1,
-        -half_w, 0.0f, z1,
-    };
-    lod.mesh.normals = {
-        0.0f, 1.0f, 0.0f,
-        0.0f, 1.0f, 0.0f,
-        0.0f, 1.0f, 0.0f,
-        0.0f, 1.0f, 0.0f,
-    };
-    // C9 P4 — UV maps to cell 0 of the 8-azimuth impostor atlas
-    // (u=[0, 1/8], v=[0, 1]). When no impostor atlas is baked, the billboard
-    // material still references the bark texture and the narrow UV just
-    // samples a vertical bark stripe — acceptable at L3 distance.
-    constexpr float k_cell_u = 1.0f / 8.0f;
-    lod.mesh.uvs = {
-        0.0f,     0.0f,
-        k_cell_u, 0.0f,
-        k_cell_u, 1.0f,
-        0.0f,     1.0f,
-    };
-    // 4 triangles: front (CCW from +Y) + back (CCW from -Y) so visible
-    // from either side without face-culling concerns.
-    lod.indices_u32 = {
-        0, 1, 2,  0, 2, 3,    // front
-        0, 2, 1,  0, 3, 2,    // back
-    };
-    // Wind weights = all zeros (4 bytes/vert × 4 verts = 16). Keeps the
-    // `_RYNX_WIND` accessor present so the runtime doesn't fork its vertex-
-    // attribute layout per LOD. Trunk/branch/twig/leaf all 0 → no animation.
-    lod.wind_weights_packed.assign(4u * 4u, 0u);
-
-    // C1 P6 — billboard tangent: +X for all 4 verts (UV-right of the billboard).
-    lod.bark_tangents = {
-        1.0f, 0.0f, 0.0f, 1.0f,
-        1.0f, 0.0f, 0.0f, 1.0f,
-        1.0f, 0.0f, 0.0f, 1.0f,
-        1.0f, 0.0f, 0.0f, 1.0f,
-    };
-
-    return lod;
-}
-
 // Leaf binding against the decimated rig. leaf_out.bone_index arrives holding
 // ORIGINAL skeleton node ids; rebind to run bones, derive the run blend at the
 // attachment point (t_seg = 1), and pin the tumble pivot to the original host
@@ -202,7 +140,7 @@ std::vector<LodOutput> emit_all_lods(const TreeSkeleton&    skel,
     for (int i = 0; i < 3; ++i) {
         out.push_back(emit_one_bark_lod(skel, rig, base_opts, budget, tree_height_m, i));
     }
-    // L3 billboard stub suppressed (C10).
+    // Three LODs (C10).
     return out;
 }
 
@@ -304,7 +242,7 @@ std::vector<LodOutput> emit_all_lods(const TreeSkeleton&            skel,
 
         out.push_back(std::move(lod));
     }
-    // L3 billboard stub suppressed (C10).
+    // Three LODs (C10).
     return out;
 }
 

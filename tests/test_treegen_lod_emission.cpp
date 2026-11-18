@@ -1,5 +1,5 @@
-// [treegen_lod_emission] — pins C4 P4. Per-LOD face budget allocator + 4-LOD
-// multi-mesh GLB emission (3 bark LODs + 1 billboard stub). Round-trip via
+// [treegen_lod_emission] — pins C4 P4. Per-LOD face budget allocator + 3-LOD
+// multi-mesh GLB emission. Round-trip via
 // gltf_view confirms the `_RYNX_LOD` extension survives write/read and the
 // per-LOD wind weights are present.
 //
@@ -116,7 +116,7 @@ TEST_CASE("[treegen_lod_emission] oak emits 3 LODs in one multi-mesh GLB",
     ts::LodBudget budget;  // P5 defaults: L0=12000, L1=4000, L2=1500, L3=4
 
     auto lods = ts::emit_all_lods(skel, base_opts, budget, s.tree.height_m, seed_effective);
-    REQUIRE(lods.size() == 3u);  // C10: L3 billboard stub suppressed
+    REQUIRE(lods.size() == 3u);  // C10: three mesh LODs
 
     // lod_index values are 0..2; fallback distances are camera-derived from
     // screen-height pixel thresholds (120/40/15px → 45/135/360m).

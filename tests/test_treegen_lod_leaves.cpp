@@ -156,7 +156,7 @@ TEST_CASE("[treegen_lod_leaves] oak default-budget per-LOD invariants + multi-pr
     auto lods = ts::emit_all_lods(skel, skel.leaf_sites, base_opts, bark_budget,
                                   leaf_budget, leaf_geom_opts,
                                   s.tree.height_m, seed_effective);
-    REQUIRE(lods.size() == 3u);  // C10: L3 billboard stub suppressed
+    REQUIRE(lods.size() == 3u);  // C10: three mesh LODs
 
     // ---- Bark + leaf per-LOD budget compliance ----
     for (int i = 0; i < 3; ++i) {

@@ -27,6 +27,8 @@ namespace treegen {
 struct LodOutput {
     cpu_mesh_out          mesh;                   // bark: positions/normals/uvs populated
     std::vector<uint32_t> indices_u32;            // bark: triangle list
+    std::vector<uint8_t>  bark_triangle_class;    // T0 ledger: BarkTriClass per bark triangle (not in the GLB)
+    std::vector<int32_t>  bark_triangle_node;     // T0 ledger: skeleton node per bark triangle (not in the GLB)
     std::vector<uint8_t>  wind_weights_packed;    // bark: 4 bytes/vert; empty for L3 (all zeros baked anyway)
     std::vector<float>    bark_tangents;           // C1 P6 — xyzw packed, 4 floats/vert
     int                   lod_index           = 0;

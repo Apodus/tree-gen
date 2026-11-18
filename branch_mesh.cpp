@@ -18,6 +18,7 @@
 #include "wind_weights.hpp"
 
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <cstdint>
 
@@ -255,6 +256,7 @@ BarkMeshOutput build_bark_mesh(const TreeSkeleton& skel, const BarkMeshOptions& 
 
             if (prev_ring_start >= 0) {
                 emit_strip(indices, prev_ring_start, ring_start, N);
+                tag_new_triangles(out, BarkTriClass::tube, i);
             }
             prev_ring_start = ring_start;
         }
@@ -293,6 +295,7 @@ BarkMeshOutput build_bark_mesh(const TreeSkeleton& skel, const BarkMeshOptions& 
                 indices.push_back(b);
                 indices.push_back(c);
             }
+            tag_new_triangles(out, BarkTriClass::tip, i);
         }
     }
 
@@ -335,6 +338,7 @@ BarkMeshOutput build_bark_mesh(const TreeSkeleton& skel, const BarkMeshOptions& 
     }
     out.wind_weights_packed = bake_wind_weights(skel, vert_node_idx, z_per_vert, opts.tree_height_m);
 
+    assert(out.triangle_class.size() == out.indices_u32.size() / 3);
     return out;
 }
 

@@ -96,6 +96,8 @@ LodOutput emit_one_bark_lod(const TreeSkeleton&    skel,
     lod.bone_count         = rig.bone_count;
     lod.mesh                = std::move(bark.mesh);
     lod.indices_u32         = std::move(bark.indices_u32);
+    lod.bark_triangle_class = std::move(bark.triangle_class);
+    lod.bark_triangle_node  = std::move(bark.triangle_node);
     lod.wind_weights_packed = std::move(bark.wind_weights_packed);
     lod.bark_tangents       = std::move(bark.tangents);
     lod.lod_index            = lod_index;

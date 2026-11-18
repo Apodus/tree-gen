@@ -523,6 +523,8 @@ void apply_skin_rim_blend(BarkMeshOutput& bark,
                 }
             }
 
+            tag_new_triangles(bark, BarkTriClass::collar, child_node);
+
             // Store collar info for crotch cap pass.
             child_collar_info[static_cast<size_t>(k)].first_collar_vert_start = first_collar_vert_start;
             child_collar_info[static_cast<size_t>(k)].child_index_k           = k;
@@ -620,6 +622,7 @@ void apply_skin_rim_blend(BarkMeshOutput& bark,
             bark.indices_u32.push_back(cIdx);
             bark.indices_u32.push_back(cA);
             bark.indices_u32.push_back(cB);
+            tag_new_triangles(bark, BarkTriClass::crotch, fork_node);
         }
     }
 }

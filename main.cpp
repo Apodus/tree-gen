@@ -21,6 +21,7 @@
 #include "species_registry.hpp"
 #include "tree_descriptor.hpp"
 #include "treegen_root.hpp"
+#include "tree_ledger.hpp"
 #include "trivial_cylinder.hpp"
 #include "vec3.hpp"
 
@@ -64,8 +65,8 @@ constexpr std::array<treegen::EnvelopeShape, 5> k_all_envelope_shapes = {
 
 void print_usage() {
     std::fprintf(stderr,
-        "usage: rynx-treegen --scenario=<path> [--seed=<u64>] [--out=<path>] [--dump-skeleton-json=<path>]\n"
-        "       rynx-treegen --species=<name> [--seed=<u64>] [--out=<path>] [--dump-skeleton-json=<path>]\n"
+        "usage: rynx-treegen --scenario=<path> [--seed=<u64>] [--out=<path>] [--dump-skeleton-json=<path>] [--ledger=<path>]\n"
+        "       rynx-treegen --species=<name> [--seed=<u64>] [--out=<path>] [--dump-skeleton-json=<path>] [--ledger=<path>]\n"
         "       rynx-treegen --list-species\n"
         "       rynx-treegen --print-root\n"
         "       rynx-treegen --list-envelope-shapes\n"
@@ -102,6 +103,7 @@ void print_help() {
         "  --seed=<u64>                  CLI seed XOR'd with scenario_fnv (default 0).\n"
         "  --out=<path>                  Mesh output (.glb).\n"
         "  --dump-skeleton-json=<path>   Write TreeSkeleton JSON dump (tree scenarios).\n"
+        "  --ledger=<path>               Write the geometry ledger JSON (tree scenarios; needs --out).\n"
         "  --list-species                Print available species names + exit.\n"
         "  --print-root                  Print the repository root found from the exe's location + exit.\n"
         "  --list-envelope-shapes        Print the 5 envelope shape names + exit.\n"
@@ -190,6 +192,7 @@ int main(int argc, char** argv) {
         std::string species_name;
         std::string out_path;
         std::string skeleton_json_path;
+        std::string ledger_path;
         uint64_t    cli_seed = 0;
 
         // --dump-skeleton-json MUST be matched before --dump (prefix-wise the
@@ -224,6 +227,7 @@ int main(int argc, char** argv) {
             if (const char* v = match_arg(arg, "--species",  argc, argv, i)) { species_name = v; continue; }
             if (const char* v = match_arg(arg, "--seed",     argc, argv, i)) { cli_seed = parse_u64(v); continue; }
             if (const char* v = match_arg(arg, "--out",      argc, argv, i)) { out_path = v; continue; }
+            if (const char* v = match_arg(arg, "--ledger",   argc, argv, i)) { ledger_path = v; continue; }
             if (std::strcmp(arg, "-h") == 0 || std::strcmp(arg, "--help") == 0) { print_help(); return 0; }
             std::fprintf(stderr, "rynx-treegen: unknown argument: %s\n", arg);
             print_usage();
@@ -233,6 +237,13 @@ int main(int argc, char** argv) {
         // --species and --scenario are mutually exclusive.
         if (!species_name.empty() && !scenario_path.empty()) {
             std::fprintf(stderr, "rynx-treegen: --species and --scenario are mutually exclusive\n");
+            print_usage();
+            return 2;
+        }
+
+        // The levels are built only when a GLB is written.
+        if (!ledger_path.empty() && out_path.empty()) {
+            std::fprintf(stderr, "rynx-treegen: --ledger needs --out (the levels are built only when a GLB is written)\n");
             print_usage();
             return 2;
         }
@@ -260,6 +271,10 @@ int main(int argc, char** argv) {
 
         treegen::Scenario s = treegen::load_scenario(scenario_path);
         uint64_t seed_effective = cli_seed ^ s.scenario_fnv;
+        if (!ledger_path.empty() && s.kind != "tree") {
+            std::fprintf(stderr, "rynx-treegen: --ledger is for tree scenarios (this one is %s)\n", s.kind.c_str());
+            return 2;
+        }
 
         // %g for floats: deterministic shortest round-trippable form across
         // MSVC stdlib versions. %016llx pins width so seed lines align byte-
@@ -382,6 +397,22 @@ int main(int argc, char** argv) {
                 } else {
                     lods = treegen::emit_all_lods(skel, bopts, budget,
                                                   s.tree.height_m, seed_effective);
+                }
+
+                if (!ledger_path.empty()) {
+                    const std::string doc = treegen::ledger_json(treegen::compute_ledger(
+                        s.tree, skel, std::span<const treegen::LodOutput>(lods.data(), lods.size())));
+                    std::ofstream f(ledger_path, std::ios::binary);
+                    if (!f) {
+                        std::fprintf(stderr, "rynx-treegen: cannot open ledger path: %s\n", ledger_path.c_str());
+                        return 1;
+                    }
+                    f.write(doc.data(), static_cast<std::streamsize>(doc.size()));
+                    if (!f) {
+                        std::fprintf(stderr, "rynx-treegen: write failed: %s\n", ledger_path.c_str());
+                        return 1;
+                    }
+                    std::printf("treegen: wrote ledger to %s\n", ledger_path.c_str());
                 }
 
                 // C6 P4 — bark textures (per-species, shared across LODs).

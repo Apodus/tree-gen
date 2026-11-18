@@ -61,6 +61,9 @@ struct RingMetadata {
     int   collar_sequence  = -1; // P2+3: 0-based position in collar chain (0 = near parent rim)
 };
 
+// T0 ledger — which emitter produced a bark triangle. Not written to the GLB.
+enum class BarkTriClass : uint8_t { tube = 0, tip = 1, collar = 2, crotch = 3 };
+
 // We carry u32 indices alongside cpu_mesh_out (which only has u16) because a
 // non-toy tree (oak ~1700 nodes × ~30 verts/seg) easily blows past 65535
 // verts. cpu_mesh_out is intentionally left unchanged — it pins the C1
@@ -83,7 +86,18 @@ struct BarkMeshOutput {
     // parent), t=1 (child end / tip cap) → 0 (fully host). Fork-continuity.
     // Length == mesh.positions.size() / 3.
     std::vector<uint8_t>      bone_blend;
+    // T0 ledger — one entry per triangle, in indices_u32 order: the emitter class
+    // and the skeleton node it belongs to.
+    std::vector<uint8_t>      triangle_class;
+    std::vector<int32_t>      triangle_node;
 };
+
+// Tags every triangle appended since the last tag with `c` and `node`.
+inline void tag_new_triangles(BarkMeshOutput& b, BarkTriClass c, int node) {
+    const size_t n = b.indices_u32.size() / 3;
+    b.triangle_class.resize(n, static_cast<uint8_t>(c));
+    b.triangle_node.resize(n, static_cast<int32_t>(node));
+}
 
 BarkMeshOutput build_bark_mesh(const TreeSkeleton& skel, const BarkMeshOptions& opts);
 

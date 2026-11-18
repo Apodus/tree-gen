@@ -1,6 +1,7 @@
-// [ledger] / [skeleton] — T0 geometry ledger (tree-budget plan, phase T0).
+// [ledger] — T0 geometry ledger (tree-budget plan, phase T0).
 //
-// G0a classes are counted right; G0b the stall detector; G0c the premise check
+// G0a classes, nodes and diameter bins are counted right (plus hand-placed edge
+// and leaf-host arms); G0b the stall detector; G0c the premise check
 // over the 16 shipped trees; G0d the 36-seed baselines; G0e fingerprints and
 // vertex sums; G0f the schema. The shipped trees are built in-process exactly as
 // main.cpp builds them (a case below byte-compares this mirror's ledger with the
@@ -193,7 +194,7 @@ std::vector<std::string> expected_schema_keys(size_t levels) {
         for (const char* s : {"level", "bark_triangles", "bark_vertices", "tube", "tip", "collar", "crotch",
                               "tube_tip_by_diameter", "tube", "tip",
                               "coincident_triangles", "tube", "tip", "collar", "crotch",
-                              "open_edges", "nonmanifold_edges",
+                              "open_edges", "nonmanifold_edges", "degenerate_triangles",
                               "leaf_triangles", "leaf_vertices", "leaf_card_area_m2", "leaf_hosts",
                               "leaf_max_vertices_on_one_host", "leaf_distinct_position_ratio"})
             k.push_back(s);
@@ -215,20 +216,23 @@ int level_leaf_vertex_sum(int level) {
 }  // namespace
 
 // ---------------------------------------------------------------------------
-// G0a — classes are counted right (asserts).
+// G0a — classes, nodes and diameter bins are counted right (asserts). Every count
+// is a closed form from the hand-built tree; none is a remainder.
 // ---------------------------------------------------------------------------
 TEST_CASE("[ledger] G0a bark triangle classes on a hand-built fork", "[treegen][ledger]") {
     // Root, a trunk of 3 nodes (the last is the fork), two children of 2 nodes each.
+    // Radii put the tubes in four diameter classes, two of them exactly on a class
+    // boundary (2 * 0.04f == 0.08f and 2 * 0.02f == 0.04f exactly: the upper class).
     ts::TreeSkeleton skel;
     skel.nodes = {
         node(-1, {0, 0, 0}, 0.20f, 0),
-        node(0, {0, 0, 1}, 0.18f, 0),
-        node(1, {0, 0, 2}, 0.16f, 0),
-        node(2, {0, 0, 3}, 0.14f, 0),
-        node(3, {0.4f, 0, 3.4f}, 0.08f, 1),
-        node(4, {0.8f, 0, 3.8f}, 0.06f, 1),
-        node(3, {-0.4f, 0, 3.4f}, 0.08f, 1),
-        node(6, {-0.8f, 0, 3.8f}, 0.06f, 1),
+        node(0, {0, 0, 1}, 0.10f, 0),           // d 0.20: >= 16 cm
+        node(1, {0, 0, 2}, 0.06f, 0),           // d 0.12: 8-16
+        node(2, {0, 0, 3}, 0.04f, 0),           // d 0.08: 8-16 (boundary)
+        node(3, {0.4f, 0, 3.4f}, 0.015f, 1),    // d 0.03: 2-4
+        node(4, {0.8f, 0, 3.8f}, 0.005f, 1),    // d 0.01: < 2
+        node(3, {-0.4f, 0, 3.4f}, 0.02f, 1),    // d 0.04: 4-8 (boundary)
+        node(6, {-0.8f, 0, 3.8f}, 0.009f, 1),   // d 0.018: < 2
     };
     ts::BarkMeshOptions opts;
     opts.radial_seg_trunk = 8;
@@ -239,7 +243,8 @@ TEST_CASE("[ledger] G0a bark triangle classes on a hand-built fork", "[treegen][
 
     // Tube closed form: every emitted segment contributes axial_segs strips of N quads
     // (a continuation-merged segment reuses the parent's ring as its s=0 ring and still
-    // emits axial_segs strips), 2 triangles per quad.
+    // emits axial_segs strips), 2 triangles per quad. Trunk segments are 1 m (2 axial),
+    // the children's 0.57 m (1 axial).
     int tube_expected = 0;
     for (size_t i = 1; i < skel.nodes.size(); ++i) {
         const auto& n = skel.nodes[i];
@@ -249,20 +254,32 @@ TEST_CASE("[ledger] G0a bark triangle classes on a hand-built fork", "[treegen][
     }
     REQUIRE(tube_expected == 3 * 2 * 8 * 2 + 4 * 2 * 5 * 1);
     const int tip_expected = N[1] + N[1];  // leaf nodes 5 and 7
+    // Diameter classes < 2, 2-4, 4-8, 8-16, >= 16 cm. Tubes: nodes 5, 7 (10 each) | node 4 |
+    // node 6 | nodes 2, 3 (32 each) | node 1 (32). Tips: the fans of nodes 5 and 7.
+    const std::array<int, 5> tube_bins = {20, 10, 10, 64, 32};
+    const std::array<int, 5> tip_bins  = {10, 0, 0, 0, 0};
 
     SECTION("fork blend on") {
+        // Collar closed form per child k (fork_blend.cpp): n_collar = clamp(ceil(45 deg / 30), 2, 5)
+        // = 2 rings of the parent's N_p = 8 sides -> one strip (2 * 8 triangles); the sector stitch
+        // from the child's parent-rim sector s_k to the first collar ring, (|s_k| - 1) + (8 - 1);
+        // the full-ring stitch from the last collar ring to the child's 5-sided first ring,
+        // (8 - 1) + (5 - 1). The two sectors partition the 8 rim vertices.
+        const int collar_expected = 2 * (2 * 8) + (8 - 2) + 2 * (8 - 1) + 2 * ((8 - 1) + (5 - 1));
+        REQUIRE(collar_expected == 74);
         const ts::LodOutput lv[1] = {as_level(ts::build_bark_mesh(skel, opts))};
         const int tris = int(lv[0].indices_u32.size() / 3);
         REQUIRE(tris > 0);
         const ts::TreeLedger L = ts::compute_ledger(ts::TreeDescriptor{}, skel, lv);
         const auto& c = L.levels[0].by_class;
         INFO("tube=" << c[0] << " tip=" << c[1] << " collar=" << c[2] << " crotch=" << c[3] << " total=" << tris);
-        CHECK(c[0] + c[1] + c[2] + c[3] == tris);
         CHECK(c[0] == tube_expected);
         CHECK(c[1] == tip_expected);
+        CHECK(c[2] == collar_expected);
         CHECK(c[3] == 2);  // a two-child fork emits its crotch pair twice
-        CHECK(c[2] == tris - c[0] - c[1] - c[3]);
-        CHECK(c[2] > 0);
+        CHECK(c[0] + c[1] + c[2] + c[3] == tris);
+        CHECK(L.levels[0].tube_by_diameter == tube_bins);
+        CHECK(L.levels[0].tip_by_diameter == tip_bins);
     }
     SECTION("fork blend off") {
         opts.apply_fork_blend = false;
@@ -272,12 +289,91 @@ TEST_CASE("[ledger] G0a bark triangle classes on a hand-built fork", "[treegen][
         const ts::TreeLedger L = ts::compute_ledger(ts::TreeDescriptor{}, skel, lv);
         const auto& c = L.levels[0].by_class;
         INFO("tube=" << c[0] << " tip=" << c[1] << " collar=" << c[2] << " crotch=" << c[3] << " total=" << tris);
-        CHECK(c[0] + c[1] + c[2] + c[3] == tris);
         CHECK(c[0] == tube_expected);
         CHECK(c[1] == tip_expected);
         CHECK(c[2] == 0);
         CHECK(c[3] == 0);
+        CHECK(c[0] + c[1] == tris);
+        CHECK(L.levels[0].tube_by_diameter == tube_bins);
+        CHECK(L.levels[0].tip_by_diameter == tip_bins);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Edges and degenerate triangles on hand-placed triangles (asserts; F4/F5).
+// ---------------------------------------------------------------------------
+TEST_CASE("[ledger] edge counts on hand-placed triangles", "[treegen][ledger]") {
+    ts::TreeSkeleton skel;
+    skel.nodes = {node(-1, {0, 0, 0}, 0.1f, 0)};
+    ts::LodOutput lod;
+    // Vertices: a unit quad 0-1-2-3, vertex 4 at vertex 1's position, vertex 5 off the quad.
+    lod.mesh.positions = {0, 0, 0,  1, 0, 0,  1, 1, 0,  0, 1, 0,  1, 0, 0,  0.5f, 0.5f, 1};
+    auto add = [&](uint32_t a, uint32_t b, uint32_t c) {
+        lod.indices_u32.insert(lod.indices_u32.end(), {a, b, c});
+        lod.bark_triangle_class.push_back(uint8_t(ts::BarkTriClass::tube));
+        lod.bark_triangle_node.push_back(0);
+    };
+    auto level = [&] {
+        const ts::LodOutput lv[1] = {lod};
+        return ts::compute_ledger(ts::TreeDescriptor{}, skel, lv).levels[0];
+    };
+    add(0, 1, 2);
+    add(0, 2, 3);
+    SECTION("a quad: four open edges, the diagonal shared") {
+        const auto L = level();
+        CHECK(L.open_edges == 4);
+        CHECK(L.nonmanifold_edges == 0);
+        CHECK(L.degenerate_triangles == 0);
+    }
+    SECTION("a triangle with two equal corners closes edge 0-1 once, not twice") {
+        add(0, 1, 4);  // corners 1 and 4 are bitwise equal: one real edge, 0-1
+        const auto L = level();
+        CHECK(L.degenerate_triangles == 1);
+        CHECK(L.open_edges == 3);       // 1-2, 2-3, 3-0
+        CHECK(L.nonmanifold_edges == 0);
+    }
+    SECTION("a third triangle on the diagonal makes it non-manifold") {
+        add(0, 2, 5);
+        const auto L = level();
+        CHECK(L.nonmanifold_edges == 1);  // 0-2
+        CHECK(L.open_edges == 4 + 2);     // the quad's four, plus 2-5 and 5-0
+        CHECK(L.degenerate_triangles == 0);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Leaf hosts and card area on hand-placed cards (asserts; F5).
+// ---------------------------------------------------------------------------
+TEST_CASE("[ledger] leaf hosts on hand-placed cards", "[treegen][ledger]") {
+    ts::TreeSkeleton skel;
+    skel.nodes = {node(-1, {0, 0, 0}, 0.1f, 0)};
+    ts::LodOutput lod;
+    lod.has_leaves = true;
+    // Three hosts: A carries one card (4 vertices), B one card (4), C two cards (8).
+    const float host[3][3] = {{0, 0, 1}, {0, 0, 2}, {0, 0, 3}};
+    const int cards_on[3] = {1, 1, 2};
+    float x = 0.0f;
+    for (int h = 0; h < 3; ++h) {
+        for (int c = 0; c < cards_on[h]; ++c) {
+            const uint32_t base = uint32_t(lod.leaf_positions.size() / 3);
+            // A 1 x 0.5 m card in the z = h plane, each card at its own x: area 0.5 m2.
+            const float q[4][3] = {{x, 0, float(h)}, {x + 1, 0, float(h)}, {x + 1, 0.5f, float(h)}, {x, 0.5f, float(h)}};
+            for (const auto& p : q) {
+                lod.leaf_positions.insert(lod.leaf_positions.end(), {p[0], p[1], p[2]});
+                lod.leaf_pivots.insert(lod.leaf_pivots.end(), {host[h][0], host[h][1], host[h][2]});
+            }
+            lod.leaf_indices_u32.insert(lod.leaf_indices_u32.end(), {base, base + 1, base + 2, base, base + 2, base + 3});
+            x += 2.0f;
+        }
+    }
+    const ts::LodOutput lv[1] = {lod};
+    const auto L = ts::compute_ledger(ts::TreeDescriptor{}, skel, lv).levels[0];
+    CHECK(L.leaf_vertices == 16);
+    CHECK(L.leaf_triangles == 8);
+    CHECK(L.leaf_hosts == 3);
+    CHECK(L.leaf_max_vertices_on_one_host == 8);
+    CHECK(L.leaf_card_area_m2 == Approx(4 * 0.5));
+    CHECK(L.leaf_distinct_position_ratio == 1.0);
 }
 
 // ---------------------------------------------------------------------------
@@ -327,6 +423,13 @@ TEST_CASE("[ledger] G0b coincident siblings and stacked triangles", "[treegen][l
         CHECK(L.skeleton.largest_coincident_stack == 1);
         CHECK(L.skeleton.near_sibling_pairs == 0);
         CHECK(L.levels[0].coincident_triangles == ts::BarkClassCounts{0, 0, 0, 0});
+        // Fork blend off: the open edges are the rings no strip closes. Root ring of node 1's
+        // tube (12 trunk sides); node 2's last ring (12: its only child has 8 sides, so no
+        // continuation merge); node 3's first ring (8). Node 3's tip fan closes its end; the
+        // seam duplicate welds by position. Nothing is shared by three triangles.
+        CHECK(L.levels[0].open_edges == opts.radial_seg_trunk + opts.radial_seg_trunk + N);
+        CHECK(L.levels[0].nonmanifold_edges == 0);
+        CHECK(L.levels[0].degenerate_triangles == 0);
     }
     SECTION("duplicate moved by 0.5 mm") {
         const auto L = ledger_of(make(true, 0.0005f));
@@ -503,6 +606,7 @@ TEST_CASE("[ledger] G0e shipped fingerprints and vertex sums", "[treegen][ledger
         REQUIRE(t.species == r.species);
         REQUIRE(t.seed == r.seed);
         CHECK(t.fnv == r.skeleton_fnv);
+        CHECK(t.fnv == r.t0_skeleton_fnv);
         CHECK(t.ledger.skeleton.iterations_run == r.t0_iterations_run);
         CHECK(t.ledger.skeleton.coincident_siblings_exact == r.t0_coincident_siblings_exact);
     }
@@ -533,6 +637,8 @@ TEST_CASE("[ledger] G0f ledger JSON field list", "[treegen][ledger]") {
     const std::string doc = ts::ledger_json(t.ledger);
     const auto expected = expected_schema_keys(t.ledger.levels.size());
     CHECK(json_keys(doc) == expected);
+    CHECK(t.ledger.schema == 1);
+    CHECK(doc.rfind("{\"schema\": 1, ", 0) == 0);
 
     // Positive control: the same comparison fails on a document with one field removed.
     const std::string field = "\"open_edges\": ";

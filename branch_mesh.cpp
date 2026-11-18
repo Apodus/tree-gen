@@ -111,19 +111,6 @@ int emit_ring(cpu_mesh_out& mesh,
     return start;
 }
 
-// Two CCW triangles per quad between two adjacent (N+1)-vert rings.
-void emit_strip(std::vector<uint32_t>& indices, int ring_a_start, int ring_b_start, int N) {
-    for (int i = 0; i < N; ++i) {
-        const uint32_t a0 = static_cast<uint32_t>(ring_a_start + i);
-        const uint32_t a1 = static_cast<uint32_t>(ring_a_start + i + 1);
-        const uint32_t b0 = static_cast<uint32_t>(ring_b_start + i);
-        const uint32_t b1 = static_cast<uint32_t>(ring_b_start + i + 1);
-        // Quad (a0, a1, b1, b0) → (a0, a1, b1) + (a0, b1, b0).
-        indices.push_back(a0); indices.push_back(a1); indices.push_back(b1);
-        indices.push_back(a0); indices.push_back(b1); indices.push_back(b0);
-    }
-}
-
 int radial_for_depth(int depth, const BarkMeshOptions& opts) {
     if (depth == 0) return opts.radial_seg_trunk;
     if (depth == 1) return opts.radial_seg_order1;
@@ -136,7 +123,6 @@ int radial_for_depth(int depth, const BarkMeshOptions& opts) {
 BarkMeshOutput build_bark_mesh(const TreeSkeleton& skel, const BarkMeshOptions& opts) {
     BarkMeshOutput out;
     auto& mesh          = out.mesh;
-    auto& indices       = out.indices_u32;
     auto& vert_node_idx = out.per_vertex_node_index;
     auto& rings         = out.ring_metadata;
 
@@ -255,8 +241,7 @@ BarkMeshOutput build_bark_mesh(const TreeSkeleton& skel, const BarkMeshOptions& 
             rings.push_back(rm);
 
             if (prev_ring_start >= 0) {
-                emit_strip(indices, prev_ring_start, ring_start, N);
-                tag_new_triangles(out, BarkTriClass::tube, i);
+                emit_bark_strip(out, prev_ring_start, ring_start, N, BarkTriClass::tube, i);
             }
             prev_ring_start = ring_start;
         }
@@ -291,11 +276,8 @@ BarkMeshOutput build_bark_mesh(const TreeSkeleton& skel, const BarkMeshOptions& 
                 const uint32_t a = static_cast<uint32_t>(prev_ring_start + j);
                 const uint32_t b = static_cast<uint32_t>(prev_ring_start + j + 1);
                 const uint32_t c = static_cast<uint32_t>(centroid);
-                indices.push_back(a);
-                indices.push_back(b);
-                indices.push_back(c);
+                emit_bark_triangle(out, a, b, c, BarkTriClass::tip, i);
             }
-            tag_new_triangles(out, BarkTriClass::tip, i);
         }
     }
 

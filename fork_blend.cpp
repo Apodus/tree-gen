@@ -78,18 +78,6 @@ inline float angle_dist(float a, float b) {
     return std::abs(angle_wrap_signed(a - b));
 }
 
-// Mirrors branch_mesh.cpp::emit_strip.
-void emit_strip(std::vector<uint32_t>& indices, int ring_a_start, int ring_b_start, int N) {
-    for (int i = 0; i < N; ++i) {
-        const uint32_t a0 = static_cast<uint32_t>(ring_a_start + i);
-        const uint32_t a1 = static_cast<uint32_t>(ring_a_start + i + 1);
-        const uint32_t b0 = static_cast<uint32_t>(ring_b_start + i);
-        const uint32_t b1 = static_cast<uint32_t>(ring_b_start + i + 1);
-        indices.push_back(a0); indices.push_back(a1); indices.push_back(b1);
-        indices.push_back(a0); indices.push_back(b1); indices.push_back(b0);
-    }
-}
-
 struct BranchRingRange {
     int first; // first ring metadata index
     int count;
@@ -171,7 +159,7 @@ std::vector<int> extract_sector(const std::vector<float>& parent_angles,
     return sector;
 }
 
-void emit_sector_stitch(std::vector<uint32_t>& indices,
+void emit_sector_stitch(BarkMeshOutput& bark, int child_node,
                         int P0, const std::vector<int>& parent_sector,
                         int C0, const std::vector<int>& child_sweep,
                         const std::vector<float>& parent_angles,
@@ -217,16 +205,12 @@ void emit_sector_stitch(std::vector<uint32_t>& indices,
         if (advance_parent) {
             const uint32_t p_next_v =
                 static_cast<uint32_t>(P0 + parent_sector[static_cast<size_t>(p + 1)]);
-            indices.push_back(p_cur);
-            indices.push_back(p_next_v);
-            indices.push_back(c_cur);
+            emit_bark_triangle(bark, p_cur, p_next_v, c_cur, BarkTriClass::collar, child_node);
             ++p;
         } else {
             const uint32_t c_next_v =
                 static_cast<uint32_t>(C0 + child_sweep[static_cast<size_t>(c + 1)]);
-            indices.push_back(p_cur);
-            indices.push_back(c_next_v);
-            indices.push_back(c_cur);
+            emit_bark_triangle(bark, p_cur, c_next_v, c_cur, BarkTriClass::collar, child_node);
             ++c;
         }
     }
@@ -460,7 +444,7 @@ void apply_skin_rim_blend(BarkMeshOutput& bark,
                 bark.ring_metadata.push_back(rm);
 
                 if (prev_ring_start >= 0) {
-                    emit_strip(bark.indices_u32, prev_ring_start, ring_start, N_p);
+                    emit_bark_strip(bark, prev_ring_start, ring_start, N_p, BarkTriClass::collar, child_node);
                 }
                 prev_ring_start = ring_start;
             }
@@ -475,7 +459,7 @@ void apply_skin_rim_blend(BarkMeshOutput& bark,
                 }
                 const std::vector<int> collar_sweep = sort_by_angle(collar_angles);
 
-                emit_sector_stitch(bark.indices_u32,
+                emit_sector_stitch(bark, child_node,
                                    parent_rim.vert_start, sector,
                                    first_collar_vert_start, collar_sweep,
                                    parent_angles, collar_angles);
@@ -487,7 +471,7 @@ void apply_skin_rim_blend(BarkMeshOutput& bark,
                 if (child_span.first >= 0 && child_span.count > 0) {
                     const RingMetadata child_s0 = bark.ring_metadata[static_cast<size_t>(child_span.first)];
                     if (child_s0.N == N_p) {
-                        emit_strip(bark.indices_u32, prev_ring_start, child_s0.vert_start, N_p);
+                        emit_bark_strip(bark, prev_ring_start, child_s0.vert_start, N_p, BarkTriClass::collar, child_node);
                     } else {
                         // N mismatch: full-ring bipartite stitch.
                         std::vector<float> last_collar_angles(static_cast<size_t>(N_p));
@@ -515,15 +499,13 @@ void apply_skin_rim_blend(BarkMeshOutput& bark,
                                      < last_collar_angles[static_cast<size_t>(b)];
                             });
 
-                        emit_sector_stitch(bark.indices_u32,
+                        emit_sector_stitch(bark, child_node,
                                            prev_ring_start, full_sector,
                                            child_s0.vert_start, child_s0_sweep,
                                            last_collar_angles, child_s0_angles);
                     }
                 }
             }
-
-            tag_new_triangles(bark, BarkTriClass::collar, child_node);
 
             // Store collar info for crotch cap pass.
             child_collar_info[static_cast<size_t>(k)].first_collar_vert_start = first_collar_vert_start;
@@ -619,10 +601,7 @@ void apply_skin_rim_blend(BarkMeshOutput& bark,
             // Triangle fan from centroid to collar verts.
             // All edges involve the new centroid vertex, so no existing edge
             // can exceed 2 adjacent triangles.
-            bark.indices_u32.push_back(cIdx);
-            bark.indices_u32.push_back(cA);
-            bark.indices_u32.push_back(cB);
-            tag_new_triangles(bark, BarkTriClass::crotch, fork_node);
+            emit_bark_triangle(bark, cIdx, cA, cB, BarkTriClass::crotch, fork_node);
         }
     }
 }

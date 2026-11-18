@@ -399,22 +399,6 @@ int main(int argc, char** argv) {
                                                   s.tree.height_m, seed_effective);
                 }
 
-                if (!ledger_path.empty()) {
-                    const std::string doc = treegen::ledger_json(treegen::compute_ledger(
-                        s.tree, skel, std::span<const treegen::LodOutput>(lods.data(), lods.size())));
-                    std::ofstream f(ledger_path, std::ios::binary);
-                    if (!f) {
-                        std::fprintf(stderr, "rynx-treegen: cannot open ledger path: %s\n", ledger_path.c_str());
-                        return 1;
-                    }
-                    f.write(doc.data(), static_cast<std::streamsize>(doc.size()));
-                    if (!f) {
-                        std::fprintf(stderr, "rynx-treegen: write failed: %s\n", ledger_path.c_str());
-                        return 1;
-                    }
-                    std::printf("treegen: wrote ledger to %s\n", ledger_path.c_str());
-                }
-
                 // C6 P4 — bark textures (per-species, shared across LODs).
                 const treegen::LeafShape bark_species = s.tree.leaves.shape;
                 std::vector<treegen::ImageData> glb_images;
@@ -530,6 +514,22 @@ int main(int argc, char** argv) {
                         out_path, &err)) {
                     std::fprintf(stderr, "rynx-treegen: write_glb_multi_mesh failed: %s\n", err.c_str());
                     return 1;
+                }
+                // The ledger after the GLB: a failed GLB write leaves no ledger behind.
+                if (!ledger_path.empty()) {
+                    const std::string doc = treegen::ledger_json(treegen::compute_ledger(
+                        s.tree, skel, std::span<const treegen::LodOutput>(lods.data(), lods.size())));
+                    std::ofstream f(ledger_path, std::ios::binary);
+                    if (!f) {
+                        std::fprintf(stderr, "rynx-treegen: cannot open ledger path: %s\n", ledger_path.c_str());
+                        return 1;
+                    }
+                    f.write(doc.data(), static_cast<std::streamsize>(doc.size()));
+                    if (!f) {
+                        std::fprintf(stderr, "rynx-treegen: write failed: %s\n", ledger_path.c_str());
+                        return 1;
+                    }
+                    std::printf("treegen: wrote ledger to %s\n", ledger_path.c_str());
                 }
                 std::error_code ec;
                 auto fsize = std::filesystem::file_size(out_path, ec);

@@ -83,13 +83,21 @@ void bark_section(LevelLedger& L, const TreeSkeleton& skel, const LodOutput& lod
         for (int k = 0; k < 3; ++k) std::copy(s[size_t(k)].begin(), s[size_t(k)].end(), tk.begin() + 3 * k);
         if (!seen_tris.insert(tk).second) ++L.coincident_triangles[c];
 
+        // Each distinct position-welded edge counts once per triangle: a triangle with two
+        // bitwise-equal corners has one real edge (twice in its corner order) and one of zero length.
+        const bool degenerate = v[0] == v[1] || v[1] == v[2] || v[2] == v[0];
+        if (degenerate) ++L.degenerate_triangles;
+        Key<6> tri_edges[3];
+        int n_edges = 0;
         for (int k = 0; k < 3; ++k) {
             Key<3> a = v[k], b = v[(k + 1) % 3];
-            if (a == b) continue;  // zero-length edge of a degenerate triangle: not an edge
+            if (a == b) continue;  // zero length: not an edge
             if (b < a) std::swap(a, b);
             Key<6> ek;
             std::copy(a.begin(), a.end(), ek.begin());
             std::copy(b.begin(), b.end(), ek.begin() + 3);
+            if (std::find(tri_edges, tri_edges + n_edges, ek) != tri_edges + n_edges) continue;
+            tri_edges[n_edges++] = ek;
             ++edges[ek];
         }
     }
@@ -189,8 +197,8 @@ SkeletonLedger compute_skeleton_ledger(const TreeDescriptor& desc, const TreeSke
         if (!mm.insert(k).second) ++S.coincident_nodes_1mm;
     }
 
-    const float near = 0.25f * desc.branching.growth_distance;
-    const float near_sq = near * near;
+    const float near_dist = 0.25f * desc.branching.growth_distance;
+    const float near_sq   = near_dist * near_dist;
     for (const auto& kids : children) {
         S.largest_child_count = std::max(S.largest_child_count, static_cast<int>(kids.size()));
         std::unordered_map<Key<3>, int, KeyHash> stack;
@@ -260,6 +268,7 @@ std::string ledger_json(const TreeLedger& T) {
         put_classes(o, "coincident_triangles", L.coincident_triangles);
         put(o, "open_edges", L.open_edges);
         put(o, "nonmanifold_edges", L.nonmanifold_edges);
+        put(o, "degenerate_triangles", L.degenerate_triangles);
         put(o, "leaf_triangles", L.leaf_triangles);
         put(o, "leaf_vertices", L.leaf_vertices);
         put(o, "leaf_card_area_m2", L.leaf_card_area_m2);

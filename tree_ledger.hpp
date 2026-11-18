@@ -47,6 +47,7 @@ struct LevelLedger {
     BarkClassCounts coincident_triangles{};                       // per class of the later triangle
     int open_edges        = 0;  // position-welded edges with exactly one bark triangle
     int nonmanifold_edges = 0;  // ... with more than two
+    int degenerate_triangles = 0;  // triangles with two bitwise-equal corners (each distinct edge counts once)
     int    leaf_triangles  = 0;
     int    leaf_vertices   = 0;
     double leaf_card_area_m2 = 0.0;

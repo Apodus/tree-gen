@@ -92,11 +92,29 @@ struct BarkMeshOutput {
     std::vector<int32_t>      triangle_node;
 };
 
-// Tags every triangle appended since the last tag with `c` and `node`.
-inline void tag_new_triangles(BarkMeshOutput& b, BarkTriClass c, int node) {
-    const size_t n = b.indices_u32.size() / 3;
-    b.triangle_class.resize(n, static_cast<uint8_t>(c));
-    b.triangle_node.resize(n, static_cast<int32_t>(node));
+// The one way a bark triangle is appended: the emitter states its class and node,
+// so an emitter cannot add a triangle without classifying it.
+inline void emit_bark_triangle(BarkMeshOutput& b, uint32_t i0, uint32_t i1, uint32_t i2,
+                               BarkTriClass c, int node) {
+    b.indices_u32.push_back(i0);
+    b.indices_u32.push_back(i1);
+    b.indices_u32.push_back(i2);
+    b.triangle_class.push_back(static_cast<uint8_t>(c));
+    b.triangle_node.push_back(static_cast<int32_t>(node));
+}
+
+// Two CCW triangles per quad between two adjacent (N+1)-vert rings: quad
+// (a0, a1, b1, b0) -> (a0, a1, b1) + (a0, b1, b0).
+inline void emit_bark_strip(BarkMeshOutput& b, int ring_a_start, int ring_b_start, int N,
+                            BarkTriClass c, int node) {
+    for (int i = 0; i < N; ++i) {
+        const uint32_t a0 = static_cast<uint32_t>(ring_a_start + i);
+        const uint32_t a1 = static_cast<uint32_t>(ring_a_start + i + 1);
+        const uint32_t b0 = static_cast<uint32_t>(ring_b_start + i);
+        const uint32_t b1 = static_cast<uint32_t>(ring_b_start + i + 1);
+        emit_bark_triangle(b, a0, a1, b1, c, node);
+        emit_bark_triangle(b, a0, b1, b0, c, node);
+    }
 }
 
 BarkMeshOutput build_bark_mesh(const TreeSkeleton& skel, const BarkMeshOptions& opts);

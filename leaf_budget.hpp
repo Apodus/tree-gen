@@ -24,11 +24,17 @@ struct LeafBudget {
     // the far L2 pose IS the primary player view, so L2 leaves must stay dense.
     // Budgets raised to give the allocator room for the crossed cards; total L0
     // (bark ~9.5k + leaf ≤8k) still lands ~17k, half the original ~36k.
-    int l0_tris = 8000;
-    int l1_tris = 5000;
-    int l2_tris = 4000;
-    int l3_tris = 0;
+    // Values: k_default_lod_leaf_triangle_budget; a scenario's
+    // leaves.lod_leaf_triangle_budget replaces them (leaf_budget_from).
+    int l0_tris = k_default_lod_leaf_triangle_budget[0];
+    int l1_tris = k_default_lod_leaf_triangle_budget[1];
+    int l2_tris = k_default_lod_leaf_triangle_budget[2];
+    int l3_tris = k_default_lod_leaf_triangle_budget[3];
 };
+
+inline LeafBudget leaf_budget_from(const std::array<int, 4>& tris) {
+    return LeafBudget{tris[0], tris[1], tris[2], tris[3]};
+}
 
 struct LeafBudgetResult {
     std::vector<uint32_t> kept_indices;     // indices into the input sites vector

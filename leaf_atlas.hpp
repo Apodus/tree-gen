@@ -6,6 +6,7 @@
 #include "leaf_shapes.hpp"        // vec2
 #include "tree_descriptor.hpp"    // LeafShape
 
+#include <array>
 #include <cstdint>
 #include <vector>
 
@@ -105,13 +106,17 @@ namespace treegen {
 
     // ----- Atlas encoders --------------------------------------------------
     // P3a — alpha + diffuse (RGBA8 1024×1024, RGB = species diffuse, A = mask).
-    std::vector<uint8_t> encode_leaf_atlas_png(uint64_t seed);
+    // `cluster_cell_grid`: leaf slots (x, y) of the cluster cell (row 2); the
+    // translucency encoder must be given the same grid so its mask agrees.
+    std::vector<uint8_t> encode_leaf_atlas_png(
+        uint64_t seed, const std::array<int, 2>& cluster_cell_grid = k_default_cluster_cell_grid);
 
     // P3b — tangent-space normal (RGBA8: RGB = normal*0.5+0.5, A=255).
     std::vector<uint8_t> encode_leaf_normal_png(uint64_t seed);
 
     // P3b — translucency (RGBA8: R = trans, GB = 0, A=255).
-    std::vector<uint8_t> encode_leaf_translucency_png(uint64_t seed);
+    std::vector<uint8_t> encode_leaf_translucency_png(
+        uint64_t seed, const std::array<int, 2>& cluster_cell_grid = k_default_cluster_cell_grid);
 
     // C3 P2 — roughness (RGBA8: R = roughness, GB = 0, A=255).
     std::vector<uint8_t> encode_leaf_roughness_png(uint64_t seed);

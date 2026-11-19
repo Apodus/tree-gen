@@ -8,6 +8,7 @@
 
 #include "vec3.hpp"
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -15,6 +16,14 @@
 namespace treegen {
 
 namespace json { struct value; }
+
+// Leaf constants a crown sweep turns (scenario `leaves` fields of the same
+// names). Per-LOD leaf triangle budget L0..L3 (C3 P3 retune); canopy-shell
+// prune: sites below this crown-normalised radius are dropped (C3 P3); the
+// cluster atlas cell's leaf grid x, y (C3 P1).
+inline constexpr std::array<int, 4> k_default_lod_leaf_triangle_budget = {8000, 5000, 4000, 0};
+inline constexpr float              k_default_shell_fraction           = 0.40f;
+inline constexpr std::array<int, 2> k_default_cluster_cell_grid        = {4, 3};
 
 enum class EnvelopeShape {
     OblateSpheroid,
@@ -108,6 +117,15 @@ struct TreeDescriptor {
         float needle_spacing_ratio            = 0.07f;
         float strip_droop_angle               = 0.15f;   // radians
         float strip_radius_threshold          = 0.02f;    // branch radius above which extra strips appear
+
+        // Crown-probe sweep overrides (crown-shadows S-P0a, K17). Absent in a
+        // scenario = these defaults, which are the generator's only copy of each
+        // constant; serialize emits a field only when it differs. The first two
+        // are site-based and refused on a BranchStrip scenario (strips ignore
+        // both), so a pine sweep cannot silently do nothing.
+        std::array<int, 4> lod_leaf_triangle_budget = k_default_lod_leaf_triangle_budget;
+        float              shell_fraction           = k_default_shell_fraction;
+        std::array<int, 2> cluster_cell_grid        = k_default_cluster_cell_grid;
     } leaves;
 };
 

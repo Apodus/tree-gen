@@ -238,6 +238,7 @@ std::vector<LodOutput> emit_all_lods(const TreeSkeleton&            skel,
                 lod.leaf_wind_weights_packed   = std::move(leaf_out.wind_weights_packed);
                 lod.leaf_material_slots        = std::move(leaf_out.material_slots);
                 lod.leaf_tangents              = std::move(leaf_out.tangents);
+                lod.leaf_kept_sites            = alloc.kept_indices;
                 lod.has_leaves                 = true;
             }
         }

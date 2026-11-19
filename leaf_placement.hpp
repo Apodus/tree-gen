@@ -23,6 +23,9 @@ struct Options {
     float leaf_density_per_meter          = 8.0f;
     float leaf_depth_density_curve        = 1.0f;
     float leaf_phototropic_bias           = 0.0f;
+    // C3 P3 canopy-shell prune: sites whose crown-normalised radius is below
+    // this are dropped (scenario leaves.shell_fraction).
+    float shell_fraction                  = k_default_shell_fraction;
 };
 
 // Copy descriptor.leaves into Options.

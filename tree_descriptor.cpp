@@ -61,6 +61,35 @@ void emit_int(std::string& out, long long v) {
     out += buf;
 }
 
+// A JSON array of exactly N integers, each >= min_value; throws otherwise.
+template <size_t N>
+std::array<int, N> parse_int_array(const json::value& obj, const char* key, int min_value) {
+    const json::value* arr = json::get_array(obj, key);
+    if (!arr || arr->a.size() != N)
+        throw std::runtime_error(std::string("tree_descriptor: leaves.") + key + " must be an array of " +
+                                 std::to_string(N) + " integers");
+    std::array<int, N> out{};
+    for (size_t i = 0; i < N; ++i) {
+        const json::value& e = arr->a[i];
+        if (e.kind != json::value::kind_t::num_t || e.n != static_cast<double>(static_cast<int>(e.n)) ||
+            static_cast<int>(e.n) < min_value)
+            throw std::runtime_error(std::string("tree_descriptor: leaves.") + key + " element " +
+                                     std::to_string(i) + " must be an integer >= " + std::to_string(min_value));
+        out[i] = static_cast<int>(e.n);
+    }
+    return out;
+}
+
+template <size_t N>
+void emit_int_array(std::string& out, const std::array<int, N>& a) {
+    out += "[";
+    for (size_t i = 0; i < N; ++i) {
+        if (i) out += ", ";
+        emit_int(out, a[i]);
+    }
+    out += "]";
+}
+
 void emit_u64(std::string& out, uint64_t v) {
     char buf[32];
     std::snprintf(buf, sizeof(buf), "%llu", static_cast<unsigned long long>(v));
@@ -203,6 +232,23 @@ TreeDescriptor parse_tree_descriptor(const json::value& obj) {
         if (auto v = json::get_number(*lv, "needle_spacing_ratio"))       td.leaves.needle_spacing_ratio       = static_cast<float>(*v);
         if (auto v = json::get_number(*lv, "strip_droop_angle"))          td.leaves.strip_droop_angle          = static_cast<float>(*v);
         if (auto v = json::get_number(*lv, "strip_radius_threshold"))     td.leaves.strip_radius_threshold     = static_cast<float>(*v);
+
+        // Crown-probe sweep overrides (S-P0a, K17).
+        const bool has_budget = lv->find("lod_leaf_triangle_budget") != nullptr;
+        const bool has_shell  = lv->find("shell_fraction") != nullptr;
+        if (has_budget) td.leaves.lod_leaf_triangle_budget = parse_int_array<4>(*lv, "lod_leaf_triangle_budget", 0);
+        if (has_shell) {
+            const auto v = json::get_number(*lv, "shell_fraction");
+            if (!v || !(*v >= 0.0 && *v < 1.0))
+                throw std::runtime_error("tree_descriptor: leaves.shell_fraction must be a number in [0, 1)");
+            td.leaves.shell_fraction = static_cast<float>(*v);
+        }
+        if (lv->find("cluster_cell_grid"))
+            td.leaves.cluster_cell_grid = parse_int_array<2>(*lv, "cluster_cell_grid", 1);
+        if ((has_budget || has_shell) && td.leaves.geometry_type == LeafGeometryType::BranchStrip)
+            throw std::runtime_error(
+                "tree_descriptor: leaves.lod_leaf_triangle_budget and leaves.shell_fraction act on leaf sites; "
+                "a branch_strip scenario emits strips per skeleton segment and ignores both");
     }
 
     return td;
@@ -272,7 +318,22 @@ std::string serialize_tree_descriptor(const TreeDescriptor& td) {
     indent(out, 2); out += "\"needle_count_per_strip\": ";    emit_int  (out, td.leaves.needle_count_per_strip);    out += ",\n";
     indent(out, 2); out += "\"needle_spacing_ratio\": ";      emit_float(out, td.leaves.needle_spacing_ratio);      out += ",\n";
     indent(out, 2); out += "\"strip_droop_angle\": ";         emit_float(out, td.leaves.strip_droop_angle);         out += ",\n";
-    indent(out, 2); out += "\"strip_radius_threshold\": ";    emit_float(out, td.leaves.strip_radius_threshold);    out += "\n";
+    indent(out, 2); out += "\"strip_radius_threshold\": ";    emit_float(out, td.leaves.strip_radius_threshold);
+    // Sweep overrides: emitted only when set away from the default, so a
+    // descriptor that never named them round-trips without them (and a
+    // branch_strip descriptor stays parseable).
+    if (td.leaves.lod_leaf_triangle_budget != k_default_lod_leaf_triangle_budget) {
+        out += ",\n"; indent(out, 2); out += "\"lod_leaf_triangle_budget\": ";
+        emit_int_array(out, td.leaves.lod_leaf_triangle_budget);
+    }
+    if (td.leaves.shell_fraction != k_default_shell_fraction) {
+        out += ",\n"; indent(out, 2); out += "\"shell_fraction\": "; emit_float(out, td.leaves.shell_fraction);
+    }
+    if (td.leaves.cluster_cell_grid != k_default_cluster_cell_grid) {
+        out += ",\n"; indent(out, 2); out += "\"cluster_cell_grid\": ";
+        emit_int_array(out, td.leaves.cluster_cell_grid);
+    }
+    out += "\n";
     indent(out, 1); out += "}\n";
 
     out += "}\n";

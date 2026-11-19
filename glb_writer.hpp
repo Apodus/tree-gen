@@ -925,15 +925,18 @@ inline bool write_glb(std::span<const PrimitiveData> primitives,
     return true;
 }
 
-// C6 P4 — multi-mesh GLB writer with embedded images. 4-arg overload adds
-// per-image PNG bytes appended to BIN as target=0 bufferViews, plus
-// images/textures/samplers JSON sections. When `images` is empty, output is
-// byte-identical to the pre-P4 3-arg overload.
-inline bool write_glb_multi_mesh(std::span<const MeshData> meshes,
+// C6 P4 — multi-mesh GLB builder with embedded images: per-image PNG bytes
+// appended to BIN as target=0 bufferViews, plus images/textures/samplers JSON
+// sections. When `images` is empty, output is byte-identical to the pre-P4
+// image-less form. Builds the GLB in memory into `out` (cleared first); false
+// with `err_out` set on invalid input. `write_glb_multi_mesh` writes exactly
+// these bytes to a file.
+inline bool build_glb_multi_mesh(std::span<const MeshData> meshes,
                                  std::span<const ImageData> images,
-                                 const std::string& output_path,
+                                 std::vector<uint8_t>& out,
                                  std::string* err_out)
 {
+    out.clear();
     auto set_err = [&](const char* m) {
         if (err_out) *err_out = m;
     };
@@ -1275,7 +1278,6 @@ inline bool write_glb_multi_mesh(std::span<const MeshData> meshes,
     const uint32_t total_len =
         12 + 8 + static_cast<uint32_t>(json.size()) + 8 + static_cast<uint32_t>(bin.size());
 
-    std::vector<uint8_t> out;
     out.reserve(total_len);
 
     auto put_u32 = [&](uint32_t v) {
@@ -1296,12 +1298,32 @@ inline bool write_glb_multi_mesh(std::span<const MeshData> meshes,
     put_u32(static_cast<uint32_t>(bin.size()));
     put_u32(0x004E4942u);
     out.insert(out.end(), bin.begin(), bin.end());
+    return true;
+}
 
+// Writes `bytes` to `output_path` (binary, truncating).
+inline bool write_glb_bytes(std::span<const uint8_t> bytes, const std::string& output_path,
+                            std::string* err_out)
+{
+    auto set_err = [&](const char* m) {
+        if (err_out) *err_out = m;
+    };
     std::ofstream f(output_path, std::ios::binary | std::ios::trunc);
     if (!f) { set_err("write_glb_multi_mesh: cannot open output file"); return false; }
-    f.write(reinterpret_cast<const char*>(out.data()), static_cast<std::streamsize>(out.size()));
+    f.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
     if (!f.good()) { set_err("write_glb_multi_mesh: write failed"); return false; }
     return true;
+}
+
+// The file form of `build_glb_multi_mesh`: the same bytes, written to a path.
+inline bool write_glb_multi_mesh(std::span<const MeshData> meshes,
+                                 std::span<const ImageData> images,
+                                 const std::string& output_path,
+                                 std::string* err_out)
+{
+    std::vector<uint8_t> bytes;
+    if (!build_glb_multi_mesh(meshes, images, bytes, err_out)) return false;
+    return write_glb_bytes(bytes, output_path, err_out);
 }
 
 // C2 P7 wrapper — 3-arg overload preserved for backwards compatibility.

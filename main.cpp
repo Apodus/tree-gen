@@ -3,10 +3,12 @@
 
 #include "bark_texture.hpp"
 #include "branch_mesh.hpp"
+#include "crown_oracle.hpp"
 #include "collision_fit.hpp"
 #include "det_rng.hpp"
 #include "envelopes.hpp"
 #include "face_budget.hpp"
+#include "generate_tree.hpp"
 #include "glb_writer.hpp"
 #include "leaf_atlas.hpp"
 #include "leaf_budget.hpp"
@@ -27,6 +29,8 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
+#include <iterator>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -67,6 +71,8 @@ void print_usage() {
     std::fprintf(stderr,
         "usage: rynx-treegen --scenario=<path> [--seed=<u64>] [--out=<path>] [--dump-skeleton-json=<path>] [--ledger=<path>]\n"
         "       rynx-treegen --species=<name> [--seed=<u64>] [--out=<path>] [--dump-skeleton-json=<path>] [--ledger=<path>]\n"
+        "       rynx-treegen (--scenario=<path> | --species=<name>) [--seed=<u64>] --probe-crown=<out.json> [probe flags]\n"
+        "       rynx-treegen --glb=<file> --probe-crown=<out.json> [probe flags]\n"
         "       rynx-treegen --list-species\n"
         "       rynx-treegen --print-root\n"
         "       rynx-treegen --list-envelope-shapes\n"
@@ -104,6 +110,13 @@ void print_help() {
         "  --out=<path>                  Mesh output (.glb).\n"
         "  --dump-skeleton-json=<path>   Write TreeSkeleton JSON dump (tree scenarios).\n"
         "  --ledger=<path>               Write the geometry ledger JSON (tree scenarios; needs --out).\n"
+        "  --probe-crown=<path>          Crown probe report JSON (schema 1) of the tree or of --glb.\n"
+        "  --glb=<file>                  Probe a GLB written by treegen instead of generating one.\n"
+        "  --modes=oracle,sunlit         Probe modes (default: all).\n"
+        "  --sun-elevations=<deg,...>    Default 10,20,30,45,60,70,75,90.\n"
+        "  --sun-azimuths=<count>        Azimuths about the vertical axis, from 0 (default 4).\n"
+        "  --eyes=<x,y,z;...>            Eye points (object space) for the sunlit share among visible sites.\n"
+        "  --probe-lod=<k>               Mesh index probed (default 0).\n"
         "  --list-species                Print available species names + exit.\n"
         "  --print-root                  Print the repository root found from the exe's location + exit.\n"
         "  --list-envelope-shapes        Print the 5 envelope shape names + exit.\n"
@@ -184,6 +197,84 @@ SkeletonStats compute_stats(const treegen::TreeSkeleton& skel, int attractors_to
     return s;
 }
 
+// Comma-separated floats; false on an empty or malformed item.
+bool parse_float_list(const std::string& s, std::vector<float>& out) {
+    out.clear();
+    size_t pos = 0;
+    while (pos <= s.size()) {
+        const size_t end = std::min(s.find(',', pos), s.size());
+        const std::string item = s.substr(pos, end - pos);
+        char* stop = nullptr;
+        const float v = std::strtof(item.c_str(), &stop);
+        if (item.empty() || stop != item.c_str() + item.size() || !std::isfinite(v)) return false;
+        out.push_back(v);
+        pos = end + 1;
+    }
+    return !out.empty();
+}
+
+// --modes, --sun-elevations, --sun-azimuths, --eyes, --probe-lod (K17).
+bool parse_probe_options(const std::string& modes, const std::string& elevations, const std::string& azimuths,
+                         const std::string& eyes, const std::string& lod, treegen::crown::ProbeOptions& o,
+                         int& lod_index, std::string& err) {
+    if (!modes.empty()) {
+        o.oracle = o.sunlit = false;
+        size_t pos = 0;
+        while (pos <= modes.size()) {
+            const size_t end = std::min(modes.find(',', pos), modes.size());
+            const std::string m = modes.substr(pos, end - pos);
+            if (m == "oracle") o.oracle = true;
+            else if (m == "sunlit") o.sunlit = true;
+            else { err = "--modes: unknown mode '" + m + "' (this build has: oracle, sunlit)"; return false; }
+            pos = end + 1;
+        }
+    }
+    if (!elevations.empty()) {
+        if (!parse_float_list(elevations, o.elevations_deg)) { err = "--sun-elevations: expected degrees, comma separated"; return false; }
+        for (float e : o.elevations_deg)
+            if (!(e > 0.0f && e <= 90.0f)) { err = "--sun-elevations: each must be in (0, 90]"; return false; }
+    }
+    if (!azimuths.empty()) {
+        char* stop = nullptr;
+        const long n = std::strtol(azimuths.c_str(), &stop, 10);
+        if (stop != azimuths.c_str() + azimuths.size() || n < 1 || n > 360) { err = "--sun-azimuths: expected a count in [1, 360]"; return false; }
+        o.azimuths = int(n);
+    }
+    if (!eyes.empty()) {
+        size_t pos = 0;
+        while (pos <= eyes.size()) {
+            const size_t end = std::min(eyes.find(';', pos), eyes.size());
+            std::vector<float> xyz;
+            if (!parse_float_list(eyes.substr(pos, end - pos), xyz) || xyz.size() != 3) {
+                err = "--eyes: expected x,y,z;x,y,z;... in the tree's object space";
+                return false;
+            }
+            o.eyes.push_back(treegen::vec3{xyz[0], xyz[1], xyz[2]});
+            pos = end + 1;
+        }
+    }
+    char* stop = nullptr;
+    const long l = std::strtol(lod.c_str(), &stop, 10);
+    if (lod.empty() || stop != lod.c_str() + lod.size() || l < 0) { err = "--probe-lod: expected a mesh index >= 0"; return false; }
+    lod_index = int(l);
+    return true;
+}
+
+int write_probe_report(const std::string& doc, const std::string& path) {
+    std::ofstream f(path, std::ios::binary);
+    if (!f) {
+        std::fprintf(stderr, "rynx-treegen: cannot open --probe-crown path: %s\n", path.c_str());
+        return 1;
+    }
+    f.write(doc.data(), static_cast<std::streamsize>(doc.size()));
+    if (!f) {
+        std::fprintf(stderr, "rynx-treegen: write failed: %s\n", path.c_str());
+        return 1;
+    }
+    std::printf("treegen: wrote crown probe report to %s\n", path.c_str());
+    return 0;
+}
+
 } // anonymous namespace
 
 int main(int argc, char** argv) {
@@ -194,6 +285,15 @@ int main(int argc, char** argv) {
         std::string skeleton_json_path;
         std::string ledger_path;
         uint64_t    cli_seed = 0;
+        bool        seed_given = false;
+        // Crown probe (crown-shadows S-P0a, K17).
+        std::string probe_path;
+        std::string glb_path;
+        std::string probe_modes;
+        std::string probe_elevations;
+        std::string probe_azimuths;
+        std::string probe_eyes;
+        std::string probe_lod = "0";
 
         // --dump-skeleton-json MUST be matched before --dump (prefix-wise the
         // longer key first), and before --scenario (no prefix conflict but
@@ -225,9 +325,16 @@ int main(int argc, char** argv) {
             if (const char* v = match_arg(arg, "--dump-skeleton-json", argc, argv, i)) { skeleton_json_path = v; continue; }
             if (const char* v = match_arg(arg, "--scenario", argc, argv, i)) { scenario_path = v; continue; }
             if (const char* v = match_arg(arg, "--species",  argc, argv, i)) { species_name = v; continue; }
-            if (const char* v = match_arg(arg, "--seed",     argc, argv, i)) { cli_seed = parse_u64(v); continue; }
+            if (const char* v = match_arg(arg, "--seed",     argc, argv, i)) { cli_seed = parse_u64(v); seed_given = true; continue; }
             if (const char* v = match_arg(arg, "--out",      argc, argv, i)) { out_path = v; continue; }
             if (const char* v = match_arg(arg, "--ledger",   argc, argv, i)) { ledger_path = v; continue; }
+            if (const char* v = match_arg(arg, "--probe-crown",    argc, argv, i)) { probe_path = v; continue; }
+            if (const char* v = match_arg(arg, "--glb",            argc, argv, i)) { glb_path = v; continue; }
+            if (const char* v = match_arg(arg, "--modes",          argc, argv, i)) { probe_modes = v; continue; }
+            if (const char* v = match_arg(arg, "--sun-elevations", argc, argv, i)) { probe_elevations = v; continue; }
+            if (const char* v = match_arg(arg, "--sun-azimuths",   argc, argv, i)) { probe_azimuths = v; continue; }
+            if (const char* v = match_arg(arg, "--eyes",           argc, argv, i)) { probe_eyes = v; continue; }
+            if (const char* v = match_arg(arg, "--probe-lod",      argc, argv, i)) { probe_lod = v; continue; }
             if (std::strcmp(arg, "-h") == 0 || std::strcmp(arg, "--help") == 0) { print_help(); return 0; }
             std::fprintf(stderr, "rynx-treegen: unknown argument: %s\n", arg);
             print_usage();
@@ -239,6 +346,42 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "rynx-treegen: --species and --scenario are mutually exclusive\n");
             print_usage();
             return 2;
+        }
+
+        // Crown probe arguments: parsed (and refused) before any generation.
+        const bool probe_flags = !glb_path.empty() || !probe_modes.empty() || !probe_elevations.empty() ||
+                                 !probe_azimuths.empty() || !probe_eyes.empty() || probe_lod != "0";
+        if (probe_flags && probe_path.empty()) {
+            std::fprintf(stderr, "rynx-treegen: --glb, --modes, --sun-elevations, --sun-azimuths, --eyes and --probe-lod need --probe-crown\n");
+            print_usage();
+            return 2;
+        }
+        treegen::crown::ProbeOptions probe_options;
+        int probe_lod_index = 0;
+        if (!probe_path.empty()) {
+            std::string err;
+            if (!parse_probe_options(probe_modes, probe_elevations, probe_azimuths, probe_eyes, probe_lod,
+                                     probe_options, probe_lod_index, err)) {
+                std::fprintf(stderr, "rynx-treegen: %s\n", err.c_str());
+                return 2;
+            }
+        }
+        if (!glb_path.empty()) {
+            if (!scenario_path.empty() || !species_name.empty() || seed_given || !out_path.empty() ||
+                !ledger_path.empty() || !skeleton_json_path.empty()) {
+                std::fprintf(stderr, "rynx-treegen: --glb is a probe input on its own (no --scenario, --species, --seed, --out, --ledger, --dump-skeleton-json)\n");
+                print_usage();
+                return 2;
+            }
+            std::ifstream f(glb_path, std::ios::binary);
+            if (!f) {
+                std::fprintf(stderr, "rynx-treegen: cannot open --glb: %s\n", glb_path.c_str());
+                return 1;
+            }
+            const std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+            const std::string input = treegen::crown::probe_input_glb(glb_path, probe_lod_index);
+            return write_probe_report(treegen::crown::probe_glb_report(bytes, probe_lod_index, probe_options, input),
+                                      probe_path);
         }
 
         // The levels are built only when a GLB is written.
@@ -275,6 +418,10 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "rynx-treegen: --ledger is for tree scenarios (this one is %s)\n", s.kind.c_str());
             return 2;
         }
+        if (!probe_path.empty() && s.kind != "tree") {
+            std::fprintf(stderr, "rynx-treegen: --probe-crown is for tree scenarios (this one is %s)\n", s.kind.c_str());
+            return 2;
+        }
 
         // %g for floats: deterministic shortest round-trippable form across
         // MSVC stdlib versions. %016llx pins width so seed lines align byte-
@@ -291,16 +438,14 @@ int main(int argc, char** argv) {
                 s.cyl.axial_segments);
         }
         else if (s.kind == "tree") {
-            // C3 P2 — grow the skeleton; print summary stats; optional JSON dump.
-            treegen::TreeSkeleton skel = treegen::grow_skeleton(s.tree, seed_effective);
-            const treegen::TrunkCapsule capsule = treegen::compute_trunk_capsule(skel, s.tree);
-
-            // C5 P1 — leaf-site generation (BranchWalk).
-            {
-                auto opts = treegen::leaf_placement::options_from_descriptor(s.tree.leaves);
-                skel.leaf_sites = treegen::leaf_placement::generate_leaf_sites(
-                    skel, opts, seed_effective);
-            }
+            // C3 P2 — grow the skeleton (generate_tree); print summary stats;
+            // optional JSON dump. Levels and the GLB are built only for --out
+            // and --probe-crown.
+            treegen::GenerateOptions gen_opts;
+            gen_opts.levels = !out_path.empty() || !probe_path.empty();
+            const treegen::GeneratedTree gen = treegen::generate_tree(s, cli_seed, gen_opts);
+            const treegen::TreeSkeleton& skel    = gen.skeleton;
+            const treegen::TrunkCapsule& capsule = gen.capsule;
 
             int max_depth = 0;
             for (const auto& n : skel.nodes) {
@@ -356,162 +501,19 @@ int main(int argc, char** argv) {
                     st.attractors_used, st.attractors_total);
             }
 
+            // The probe reads the GLB bytes generate_tree returned (what --out
+            // writes), through the same loader as --glb.
+            if (!probe_path.empty()) {
+                const std::string input = treegen::crown::probe_input_scenario(scenario_path, cli_seed, probe_lod_index);
+                const int rc = write_probe_report(
+                    treegen::crown::probe_glb_report(gen.glb, probe_lod_index, probe_options, input), probe_path);
+                if (rc != 0) return rc;
+            }
+
             if (!out_path.empty()) {
-                // C4 P4 + C10 — emit 3 LODs (L0, L1, L2) into a single
-                // multi-mesh GLB. Per-LOD radial counts allocated by
-                // face_budget; per-LOD wind weights baked by lod_emitter.
-                // C5 P3 — when the scenario has leaves (density > 0 + non-empty
-                // leaf_sites), also allocate per-LOD leaf budget and emit them
-                // as primitive[1] in each LOD's MeshData. Bark-only fallback
-                // for scenarios with no leaves keeps the 5-arg overload.
-                treegen::BarkMeshOptions bopts;
-                bopts.tree_height_m      = s.tree.height_m;
-                bopts.root_flare_factor  = s.tree.root_flare_factor; // C12 P4
-                bopts.junction_shoulder_factor = s.tree.junction_shoulder_factor; // C1 P1
-                // Per-tree seam rotation: deterministic from seed_effective.
-                treegen::pcg32 rng;
-                rng.seed(seed_effective, 0x5EA00FF5E7u /* "seam offset" stream */);
-                bopts.seam_offset_rad = rng.next_float_01() * 6.28318530717958647692f;
-
-                // C3 P2 bark diet — per-species L0 (oak/pine 10k; broadleaf ≈natural).
-                treegen::LodBudget budget = treegen::lod_budget_for_species(s.tree.leaves.shape);
-
-                const bool is_strip = (s.tree.leaves.geometry_type == treegen::LeafGeometryType::BranchStrip);
-                const bool has_leaves = is_strip
-                                       || (!skel.leaf_sites.empty()
-                                           && s.tree.leaves.leaf_density_per_meter > 0.0f);
-
-                std::vector<treegen::LodOutput> lods;
-                if (has_leaves) {
-                    treegen::LeafBudget leaf_budget;  // C3 P3 retune: 8000/5000/4000/0
-                    treegen::LeafMeshOptions leaf_geom_opts;
-                    leaf_geom_opts.geometry_type         = s.tree.leaves.geometry_type;
-                    leaf_geom_opts.shape                 = s.tree.leaves.shape;
-                    leaf_geom_opts.leaf_size_m           = s.tree.leaves.leaf_size_m;
-                    leaf_geom_opts.cluster_count_per_tip = s.tree.leaves.cluster_count_per_tip;
-                    leaf_geom_opts.bend_half_angle       = s.tree.leaves.leaf_bend_half_angle;
-
-                    lods = treegen::emit_all_lods(skel, skel.leaf_sites, bopts, budget,
-                                                  leaf_budget, leaf_geom_opts,
-                                                  s.tree.height_m, seed_effective);
-                } else {
-                    lods = treegen::emit_all_lods(skel, bopts, budget,
-                                                  s.tree.height_m, seed_effective);
-                }
-
-                // C6 P4 — bark textures (per-species, shared across LODs).
-                const treegen::LeafShape bark_species = s.tree.leaves.shape;
-                std::vector<treegen::ImageData> glb_images;
-                {
-                    treegen::ImageData d, n, ao, mr;
-                    d.png_bytes  = treegen::encode_bark_png(bark_species, seed_effective);
-                    n.png_bytes  = treegen::encode_bark_normal_png(bark_species, seed_effective);
-                    ao.png_bytes = treegen::encode_bark_ao_png(bark_species, seed_effective);
-                    mr.png_bytes = treegen::encode_bark_roughness_png(bark_species, seed_effective);
-                    glb_images.push_back(std::move(d));   // index 0
-                    glb_images.push_back(std::move(n));   // index 1
-                    glb_images.push_back(std::move(ao));  // index 2
-                    glb_images.push_back(std::move(mr));  // index 3
-                }
-
-                // C6 P4 — leaf textures (when has_leaves).
-                // C3 P2 — adds roughness atlas at index 7.
-                if (has_leaves) {
-                    treegen::ImageData ld, ln, lt, lr;
-                    ld.png_bytes = treegen::encode_leaf_atlas_png(seed_effective);
-                    ln.png_bytes = treegen::encode_leaf_normal_png(seed_effective);
-                    lt.png_bytes = treegen::encode_leaf_translucency_png(seed_effective);
-                    lr.png_bytes = treegen::encode_leaf_roughness_png(seed_effective);
-                    glb_images.push_back(std::move(ld));  // index 4
-                    glb_images.push_back(std::move(ln));  // index 5
-                    glb_images.push_back(std::move(lt));  // index 6
-                    glb_images.push_back(std::move(lr));  // index 7
-                }
-
-                // Build flat per-LOD PrimitiveData arrays + MeshData wrappers.
-                // Storage lives in vectors so the spans inside MeshData remain
-                // valid until write_glb_multi_mesh returns.
-                std::vector<std::vector<treegen::PrimitiveData>> per_lod_prims(lods.size());
-                std::vector<treegen::MeshData>                    meshes;
-                meshes.reserve(lods.size());
-
-                for (size_t li = 0; li < lods.size(); ++li) {
-                    const auto& lod = lods[li];
-                    treegen::PrimitiveData bark_prim{};
-                    bark_prim.positions   = std::span<const float>(lod.mesh.positions.data(), lod.mesh.positions.size());
-                    bark_prim.normals     = std::span<const float>(lod.mesh.normals.data(),   lod.mesh.normals.size());
-                    bark_prim.uvs         = std::span<const float>(lod.mesh.uvs.data(),       lod.mesh.uvs.size());
-                    bark_prim.tangents    = std::span<const float>(lod.bark_tangents.data(),   lod.bark_tangents.size());
-                    bark_prim.indices_u32 = std::span<const uint32_t>(lod.indices_u32.data(), lod.indices_u32.size());
-                    bark_prim.wind_weights_packed = std::span<const uint8_t>(
-                        lod.wind_weights_packed.data(), lod.wind_weights_packed.size());
-                    // C8-wind P1 — bark _RYNX_BONE per-vertex binding.
-                    bark_prim.bone_index = std::span<const uint16_t>(
-                        lod.bark_bone_index.data(), lod.bark_bone_index.size());
-                    bark_prim.bone_blend = std::span<const uint8_t>(
-                        lod.bark_bone_blend.data(), lod.bark_bone_blend.size());
-                    bark_prim.material.base_color_tex_index         = 0;
-                    bark_prim.material.normal_tex_index             = 1;
-                    bark_prim.material.occlusion_tex_index          = 2;
-                    bark_prim.material.metallic_roughness_tex_index = 3;
-                    bark_prim.material.sampler_index                = 0;
-                    per_lod_prims[li].push_back(bark_prim);
-
-                    if (lod.has_leaves) {
-                        treegen::PrimitiveData leaf_prim{};
-                        leaf_prim.positions   = std::span<const float>(
-                            lod.leaf_positions.data(), lod.leaf_positions.size());
-                        leaf_prim.normals     = std::span<const float>(
-                            lod.leaf_normals.data(), lod.leaf_normals.size());
-                        leaf_prim.uvs         = std::span<const float>(
-                            lod.leaf_uvs.data(), lod.leaf_uvs.size());
-                        leaf_prim.tangents    = std::span<const float>(
-                            lod.leaf_tangents.data(), lod.leaf_tangents.size());
-                        leaf_prim.indices_u32 = std::span<const uint32_t>(
-                            lod.leaf_indices_u32.data(), lod.leaf_indices_u32.size());
-                        leaf_prim.wind_weights_packed = std::span<const uint8_t>(
-                            lod.leaf_wind_weights_packed.data(),
-                            lod.leaf_wind_weights_packed.size());
-                        // Leaf _RYNX_BONE binding: decimated-rig bone + run
-                        // blend + per-vertex rest attachment pivot (tumble).
-                        leaf_prim.bone_index = std::span<const uint16_t>(
-                            lod.leaf_bone_index.data(), lod.leaf_bone_index.size());
-                        leaf_prim.bone_blend = std::span<const uint8_t>(
-                            lod.leaf_bone_blend.data(), lod.leaf_bone_blend.size());
-                        leaf_prim.bone_pivot = std::span<const float>(
-                            lod.leaf_pivots.data(), lod.leaf_pivots.size());
-                        leaf_prim.material.alpha_mode   = "MASK";
-                        leaf_prim.material.alpha_cutoff = 0.5f;
-                        leaf_prim.material.base_color_tex_index         = 4;
-                        leaf_prim.material.normal_tex_index             = 5;
-                        leaf_prim.material.translucency_tex_index       = 6;
-                        leaf_prim.material.metallic_roughness_tex_index = 7;
-                        leaf_prim.material.sampler_index                = 1;
-                        per_lod_prims[li].push_back(leaf_prim);
-                    }
-
-                    treegen::MeshData md{};
-                    md.primitives            = std::span<const treegen::PrimitiveData>(
-                        per_lod_prims[li].data(), per_lod_prims[li].size());
-                    md.lod_index             = lod.lod_index;
-                    md.lod_max_distance_m    = lod.lod_max_distance_m;
-                    md.lod_screen_height_px  = lod.lod_screen_height_px;
-                    // Decimated bone table for this LOD (identical per LOD).
-                    md.bone_table            = std::span<const float>(
-                        lod.bone_table_records.data(), lod.bone_table_records.size());
-                    md.bone_count            = lod.bone_count;
-                    if (li == 0) {
-                        md.collision_half_length = capsule.half_length;
-                        md.collision_radius      = capsule.radius;
-                    }
-                    meshes.push_back(md);
-                }
-
+                const std::vector<treegen::LodOutput>& lods = gen.lods;
                 std::string err;
-                if (!treegen::write_glb_multi_mesh(
-                        std::span<const treegen::MeshData>(meshes.data(), meshes.size()),
-                        std::span<const treegen::ImageData>(glb_images.data(), glb_images.size()),
-                        out_path, &err)) {
+                if (!treegen::write_glb_bytes(gen.glb, out_path, &err)) {
                     std::fprintf(stderr, "rynx-treegen: write_glb_multi_mesh failed: %s\n", err.c_str());
                     return 1;
                 }

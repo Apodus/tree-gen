@@ -92,12 +92,13 @@ namespace treegen {
         // the WHOLE cell → N calls = a single full-cell leaf. Using the per-tri
         // stamper is what makes the cell read as a CLUSTER of distinct leaves.)
         // One leaf per grid slot, half-extent < half the slot so slots stay
-        // separated. Deterministic in `sp`.
+        // separated. Deterministic in `sp` and `grid` (x, y slots; the default
+        // 4 x 3 gives 12 leaves per cluster cell).
         constexpr uint64_t k_stream_cluster = 0xC3'01'03ULL;
-        constexpr int      k_cluster_grid_x = 4;
-        constexpr int      k_cluster_grid_y = 3;   // → 12 leaves per cluster cell
 
-        std::vector<uint8_t> bake_cluster_cell_alpha(LeafShape sp) {
+        std::vector<uint8_t> bake_cluster_cell_alpha(LeafShape sp, const std::array<int, 2>& grid) {
+            const int k_cluster_grid_x = grid[0];
+            const int k_cluster_grid_y = grid[1];
             const LeafShapeMesh mesh = shape_mesh_for(sp);
             std::vector<uint8_t> alpha(static_cast<size_t>(K_LEAF_CELL_PX) * K_LEAF_CELL_PX, 0);
 
@@ -505,7 +506,7 @@ namespace treegen {
 
     }  // namespace
 
-    std::vector<uint8_t> encode_leaf_atlas_png(uint64_t /*seed*/) {
+    std::vector<uint8_t> encode_leaf_atlas_png(uint64_t /*seed*/, const std::array<int, 2>& cluster_cell_grid) {
         std::vector<uint8_t> rgba(
             static_cast<size_t>(K_LEAF_ATLAS_PX) * K_LEAF_ATLAS_PX * 4, 0);
 
@@ -545,7 +546,7 @@ namespace treegen {
             const LinearRgb cluster_color{ k_leaf_color[si].r * k_cluster_ao_tint,
                                            k_leaf_color[si].g * k_cluster_ao_tint,
                                            k_leaf_color[si].b * k_cluster_ao_tint };
-            auto cluster_alpha = bake_cluster_cell_alpha(sp);
+            auto cluster_alpha = bake_cluster_cell_alpha(sp, cluster_cell_grid);
             std::vector<uint8_t> cluster_vein(static_cast<size_t>(K_LEAF_CELL_PX) * K_LEAF_CELL_PX, 0);
             std::vector<uint8_t> cluster_blur(static_cast<size_t>(K_LEAF_CELL_PX) * K_LEAF_CELL_PX, 0);
             box_blur_masked(cluster_alpha.data(), cluster_blur.data(),
@@ -659,7 +660,7 @@ namespace treegen {
                                 K_LEAF_ATLAS_PX * 4, rgba.data());
     }
 
-    std::vector<uint8_t> encode_leaf_translucency_png(uint64_t /*seed*/) {
+    std::vector<uint8_t> encode_leaf_translucency_png(uint64_t /*seed*/, const std::array<int, 2>& cluster_cell_grid) {
         // C3 P2: physically-motivated translucency. Veins block up to 80% of
         // transmitted light; edge pixels are thinner and transmit more.
         // Formula: trans = (1 - 0.8 * vein_factor) * edge_boost, clamped [0,1].
@@ -722,7 +723,7 @@ namespace treegen {
             // with the same edge boost — max 0.7·1.3=0.91, stays in-band.
             {
                 constexpr float k_cluster_trans_base = 0.7f;
-                auto cl_alpha = bake_cluster_cell_alpha(sp);
+                auto cl_alpha = bake_cluster_cell_alpha(sp, cluster_cell_grid);
                 std::vector<uint8_t> cl_blur(static_cast<size_t>(K_LEAF_CELL_PX) * K_LEAF_CELL_PX, 0);
                 box_blur_masked(cl_alpha.data(), cl_blur.data(),
                                 K_LEAF_CELL_PX, K_LEAF_CELL_PX, 3, cl_alpha.data());

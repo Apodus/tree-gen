@@ -19,6 +19,7 @@
 #include "../collision_fit.hpp"
 #include "../det_rng.hpp"
 #include "../face_budget.hpp"
+#include "../generate_tree.hpp"
 #include "../leaf_budget.hpp"
 #include "../leaf_geometry.hpp"
 #include "../leaf_placement.hpp"
@@ -74,36 +75,6 @@ ts::Scenario load_species(const std::string& species) {
     return s;
 }
 
-// The tool's tree branch (main.cpp), step for step: skeleton, leaf sites, bark
-// options, budgets, emit_all_lods.
-std::vector<ts::LodOutput> build_levels_as_tool(const ts::Scenario& s, ts::TreeSkeleton& skel,
-                                                uint64_t seed_effective) {
-    auto lp = ts::leaf_placement::options_from_descriptor(s.tree.leaves);
-    skel.leaf_sites = ts::leaf_placement::generate_leaf_sites(skel, lp, seed_effective);
-
-    ts::BarkMeshOptions bopts;
-    bopts.tree_height_m            = s.tree.height_m;
-    bopts.root_flare_factor        = s.tree.root_flare_factor;
-    bopts.junction_shoulder_factor = s.tree.junction_shoulder_factor;
-    ts::pcg32 rng;
-    rng.seed(seed_effective, 0x5EA00FF5E7u);
-    bopts.seam_offset_rad = rng.next_float_01() * 6.28318530717958647692f;
-
-    const ts::LodBudget budget = ts::lod_budget_for_species(s.tree.leaves.shape);
-    const bool is_strip   = (s.tree.leaves.geometry_type == ts::LeafGeometryType::BranchStrip);
-    const bool has_leaves = is_strip || (!skel.leaf_sites.empty() && s.tree.leaves.leaf_density_per_meter > 0.0f);
-    if (!has_leaves) return ts::emit_all_lods(skel, bopts, budget, s.tree.height_m, seed_effective);
-
-    ts::LeafBudget leaf_budget;
-    ts::LeafMeshOptions g;
-    g.geometry_type         = s.tree.leaves.geometry_type;
-    g.shape                 = s.tree.leaves.shape;
-    g.leaf_size_m           = s.tree.leaves.leaf_size_m;
-    g.cluster_count_per_tip = s.tree.leaves.cluster_count_per_tip;
-    g.bend_half_angle       = s.tree.leaves.leaf_bend_half_angle;
-    return ts::emit_all_lods(skel, skel.leaf_sites, bopts, budget, leaf_budget, g, s.tree.height_m, seed_effective);
-}
-
 struct ShippedTree {
     std::string    species;
     uint64_t       seed = 0;
@@ -112,17 +83,19 @@ struct ShippedTree {
     ts::TreeLedger ledger;
 };
 
+// The tool's tree branch: treegen::generate_tree, the one copy of the pipeline
+// (its levels; the ledger reads no image or GLB byte).
 ShippedTree build_shipped(const std::string& species, uint64_t seed) {
     const ts::Scenario s = load_species(species);
-    const uint64_t seed_effective = seed ^ s.scenario_fnv;
-    ts::TreeSkeleton skel = ts::grow_skeleton(s.tree, seed_effective);
-    const auto lods = build_levels_as_tool(s, skel, seed_effective);
+    ts::GenerateOptions levels_only;
+    levels_only.glb = false;
+    const ts::GeneratedTree g = ts::generate_tree(s, seed, levels_only);
     ShippedTree t;
     t.species = species;
     t.seed    = seed;
-    t.fnv     = skeleton_fnv(skel);
+    t.fnv     = skeleton_fnv(g.skeleton);
     t.strip   = (s.tree.leaves.geometry_type == ts::LeafGeometryType::BranchStrip);
-    t.ledger  = ts::compute_ledger(s.tree, skel, std::span<const ts::LodOutput>(lods.data(), lods.size()));
+    t.ledger  = ts::compute_ledger(s.tree, g.skeleton, std::span<const ts::LodOutput>(g.lods.data(), g.lods.size()));
     return t;
 }
 

@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 
 namespace treegen {
 
@@ -26,5 +27,9 @@ struct Scenario {
 // any failure (missing file, malformed JSON, missing required field). CLI
 // `main` catches and reports to stderr.
 Scenario load_scenario(const std::string& path);
+
+// The same parse from JSON text already in memory (a sweep edits a scenario
+// without a file). `path` only names the origin in error messages.
+Scenario parse_scenario(std::string_view text, const std::string& path);
 
 } // namespace treegen

@@ -28,7 +28,10 @@ T require(std::optional<T> v, const char* key) {
 } // anonymous namespace
 
 Scenario load_scenario(const std::string& path) {
-    std::string text = slurp(path);
+    return parse_scenario(slurp(path), path);
+}
+
+Scenario parse_scenario(std::string_view text, const std::string& path) {
     auto result = json::parse(text);
     if (!result.ok) {
         throw std::runtime_error("scenario: JSON parse error at byte " +

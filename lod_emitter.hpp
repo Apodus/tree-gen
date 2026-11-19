@@ -44,6 +44,10 @@ struct LodOutput {
     std::vector<uint8_t>  leaf_wind_weights_packed;
     std::vector<int32_t>  leaf_material_slots;
     std::vector<float>    leaf_tangents;            // C1 P6 — xyzw packed, 4 floats/vert
+    // The allocator's kept-site indices into the input site vector, in emission
+    // order (empty for strips). Not in the GLB; the crown probe's site-rule
+    // gate compares against it.
+    std::vector<uint32_t> leaf_kept_sites;
 
     // Per-vertex bone binding for analytic rotational wind, against the
     // DECIMATED rig (bone_table.hpp): bone ids are decimated-bone indices,

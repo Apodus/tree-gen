@@ -256,7 +256,9 @@ TEST_CASE("[crown_oracle] saturated slab: not measurable, body opaque, no slope"
 // ---- Format rule on synthetic volumes ----------------------------------------------
 
 namespace {
-cr::FormatDecision format_on_slab(bool horizontal) {
+// error_amp: the oracle is offset by +amp at even and -amp at odd elevation
+// indices, an error of known size that no clumping factor can absorb.
+cr::FormatDecision format_on_slab(bool horizontal, double error_amp = 0.0) {
     // The format rule's subject is the two candidate grids and the decision,
     // not the oracle (arms (a)-(c) gate that). So the "oracle" transmittance is
     // the medium's own: leaf area index L in a slab of thickness d crossed at
@@ -292,9 +294,11 @@ cr::FormatDecision format_on_slab(bool horizontal) {
     CHECK(std::abs(volume.total_area_m2() - L * w * w) <= 1e-3 * L * w * w);
 
     std::vector<cr::FormatElevation> fmt;
+    int ei = 0;
     for (const float e : {10.0f, 20.0f, 30.0f, 45.0f, 60.0f, 70.0f, 75.0f, 90.0f}) {
         const vec3 s = cr::sun_direction(e, 0.0f).dir;
         const double g = horizontal ? std::sin(e * k_pi / 180.0) : 0.5;
+        const double offset = (ei++ % 2 == 0) ? error_amp : -error_amp;
         cr::FormatElevation fe;
         fe.elevation_deg = e;
         // 8 x 8 footprints of 0.5 m on the mid-plane over [6, 10]^2: at 10
@@ -302,7 +306,7 @@ cr::FormatDecision format_on_slab(bool horizontal) {
         for (int fi = 0; fi < 8; ++fi)
             for (int fj = 0; fj < 8; ++fj) {
                 cr::FormatFootprint f;
-                f.t_oracle = float(std::exp(-L * g / std::sin(e * k_pi / 180.0)));
+                f.t_oracle = float(std::exp(-L * g / std::sin(e * k_pi / 180.0)) + offset);
                 for (int a = 0; a < 8; ++a)
                     for (int b = 0; b < 8; ++b) {
                         const vec3 q{6.0f + 0.5f * fi + (a + 0.5f) / 16.0f, 6.0f + 0.5f * fj + (b + 0.5f) / 16.0f, 0.5f};
@@ -339,6 +343,34 @@ TEST_CASE("[crown_oracle] format rule: horizontal cards decide axis-projected, G
     }
     CHECK(d.decision == "axis_projected");
     CHECK(d.clumping == 1.0f);
+}
+
+TEST_CASE("[crown_oracle] format rule: an error of known size above the threshold escalates", "[treegen][crown_oracle]") {
+    // The same exact horizontal slab with the oracle moved by +-0.08 (alternating
+    // by elevation): every model's MAE is >= 0.08 > 0.05, and one clumping
+    // factor cannot follow a sign that alternates, so the rule must say so.
+    const cr::FormatDecision d = format_on_slab(true, 0.08);
+    for (const auto& r : d.rows) {
+        INFO("e " << r.elevation_deg << " scalar " << r.scalar_mae << " axis " << r.axis_mae);
+        CHECK(r.measurable);
+        CHECK(r.axis_mae >= 0.07f);
+    }
+    CHECK(d.decision == "escalate");
+}
+
+TEST_CASE("[crown_oracle] format rule: the oracle's sampling noise sits well under the threshold", "[treegen][crown_oracle]") {
+    // Expected MAE of a footprint mean of n binary rays against an exact model,
+    // at the worst T (0.5): sqrt(T(1-T)/n) * sqrt(2/pi). At the 64 rays that
+    // select footprints it equals the 0.05 threshold (the reason for the
+    // re-measure); at the format rule's 1024 it is a quarter of it.
+    auto floor_mae = [](int n) { return std::sqrt(0.25 / n) * std::sqrt(2.0 / k_pi); };
+    const int n64 = cr::k_rays_per_side * cr::k_rays_per_side;
+    const int n_fmt = cr::k_format_rays_per_side * cr::k_format_rays_per_side;
+    INFO("noise floor MAE: " << floor_mae(n64) << " at " << n64 << " rays, " << floor_mae(n_fmt) << " at " << n_fmt
+                             << " rays; threshold " << cr::k_format_max_mae);
+    CHECK(floor_mae(n64) >= 0.9 * cr::k_format_max_mae);
+    CHECK(floor_mae(n_fmt) <= 0.25 * cr::k_format_max_mae);
+    CHECK(cr::k_format_ray_stream != cr::k_footprint_ray_stream);
 }
 
 // ---- Region logic ---------------------------------------------------------------------
@@ -408,6 +440,20 @@ TEST_CASE("[crown_oracle] region logic: rim and body by edge distance in the bea
     const std::string doc = cr::probe_report_json(small, o, "{}");
     CHECK(doc.find("\"body\": null") != std::string::npos);
     CHECK(doc.find("\"body\": {") == std::string::npos);
+
+    // Recorded, not a statement of intent: the plan's "a crown under 2 m across
+    // has no body" disagrees with 5.1's d (to the nearest OUTSIDE centre, which
+    // lies 0.2-0.36 m beyond the edge). Under the definition as written a 1.8 m
+    // disc HAS body footprints; this row pins what the definition gives today
+    // until the plan is corrected on one side or the other.
+    const cr::Probe mid = disc(vec3{0, 0, 6}, vec3{0, 0, 1}, 0.9f);
+    const cr::FootprintSet mid_set = cr::measure_footprints(mid, cr::sun_direction(90.0f, 0.0f), cr::PlaneKind::beam);
+    const auto mid_body = cr::body_stats(mid_set, cr::k_body_edge_m);
+    float max_d = 0.0f;
+    for (const auto& f : mid_set.footprints) max_d = std::max(max_d, f.edge_distance);
+    std::printf("[crown_oracle] 1.8 m disc at zenith: body footprints %d, max edge distance %.3f m\n",
+                mid_body ? mid_body->footprints : 0, max_d);
+    CHECK(mid_body.has_value());
 }
 
 // ---- Low-pass ----------------------------------------------------------------------------
@@ -522,9 +568,11 @@ TEST_CASE("[crown_oracle] site rule: c3_oak 42 L0 sites equal the emitter's kept
 // ---- Geometric normals only (K16) -------------------------------------------------------------
 
 namespace {
-cr::ProbeOptions one_direction() {
+// Four elevations spanning 70 degrees: the format rule decides, so the
+// table (the axis grid, the normals' only possible consumer) carries numbers.
+cr::ProbeOptions four_directions() {
     cr::ProbeOptions o;
-    o.elevations_deg = {45.0f};
+    o.elevations_deg = {20.0f, 45.0f, 70.0f, 90.0f};
     o.azimuths = 1;
     return o;
 }
@@ -569,10 +617,12 @@ TEST_CASE("[crown_oracle] the vertex NORMAL never reaches the report (K16)", "[t
     REQUIRE(overwritten == 3);
     REQUIRE(bytes != g.glb);
 
-    const cr::ProbeOptions o = one_direction();
+    const cr::ProbeOptions o = four_directions();
     const std::string a = cr::probe_glb_report(g.glb, 0, o, "{}");
     const std::string b = cr::probe_glb_report(bytes, 0, o, "{}");
     CHECK(a.find("\"format\": {") != std::string::npos);   // the axis grid (normals' consumer) is in the report
+    CHECK(a.find("\"decision\": \"undecidable\"") == std::string::npos);   // ... with numbers, not nulls
+    CHECK(a.find("\"axis_mae\": 0.") != std::string::npos);
     CHECK(a == b);
 }
 

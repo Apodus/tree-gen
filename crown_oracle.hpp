@@ -44,6 +44,10 @@ inline constexpr int   k_format_cells        = 32;     // the review's grid; S-P
 // 64 rays a footprint's binomial error alone (SE 0.0625 at T = 0.5) gives an
 // MAE of 0.05, the rule's own threshold, for an exact model; at 1024 it is 0.0125.
 inline constexpr int   k_format_rays_per_side = 32;
+// Jitter streams: the format rule scores footprints on rays independent of the
+// 64 that selected them, so selecting on a noisy T cannot bias its MAE.
+inline constexpr uint64_t k_footprint_ray_stream = 0xC20A5EEDull;
+inline constexpr uint64_t k_format_ray_stream    = 0xF0E3A7EDull;
 inline constexpr int   k_open_sky_directions = 64;
 
 struct SunDirection {
@@ -76,8 +80,9 @@ struct FootprintSet {
     float                  t_max = 0.0f;     // ... and end this far along the sun direction
     std::vector<Footprint> footprints;
     // The per_side^2 jittered-stratified ray origins of footprint k
-    // (deterministic; direction = sun.dir).
-    void rays(size_t k, std::vector<vec3>& out, int per_side = k_rays_per_side) const;
+    // (deterministic in `stream`; direction = sun.dir).
+    void rays(size_t k, std::vector<vec3>& out, int per_side = k_rays_per_side,
+              uint64_t stream = k_footprint_ray_stream) const;
 };
 
 // Measures every footprint of the plane's grid (the crown's projection plus one

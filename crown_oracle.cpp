@@ -20,7 +20,6 @@ constexpr double k_pi = 3.14159265358979323846;
 constexpr float  k_edge_bin_m  = 0.25f;
 constexpr float  k_trunk_bin_m = 0.5f;
 constexpr float  k_depth_bin_m = 0.5f;
-constexpr uint64_t k_ray_stream = 0xC20A5EEDull;
 
 // ---- JSON writer: deterministic, ordered keys, %.9g numbers -----------------
 class Json {
@@ -157,11 +156,11 @@ std::vector<SunDirection> sun_directions(const std::vector<float>& elevations_de
     return out;
 }
 
-void FootprintSet::rays(size_t k, std::vector<vec3>& out, int per_side) const {
+void FootprintSet::rays(size_t k, std::vector<vec3>& out, int per_side, uint64_t stream) const {
     const Footprint& f = footprints[k];
     out.clear();
     pcg32 rng;
-    rng.seed((uint64_t(uint32_t(f.i + 1000000)) << 32) | uint64_t(uint32_t(f.j + 1000000)), k_ray_stream);
+    rng.seed((uint64_t(uint32_t(f.i + 1000000)) << 32) | uint64_t(uint32_t(f.j + 1000000)), stream);
     const float sub = k_footprint_m / float(per_side);
     for (int a = 0; a < per_side; ++a)
         for (int b = 0; b < per_side; ++b) {
@@ -302,7 +301,7 @@ void add_format_footprints(const Probe& probe, const FootprintSet& set, const Cr
     std::vector<FormatFootprint> out(chosen.size());
     parallel_for(chosen.size(), [&](size_t c) {
         std::vector<vec3> rays;
-        set.rays(chosen[c], rays, k_format_rays_per_side);
+        set.rays(chosen[c], rays, k_format_rays_per_side, k_format_ray_stream);
         int open = 0;
         for (const vec3& o : rays) {
             open += probe.occluded(o, set.sun.dir, -1) ? 0 : 1;   // the crown lies wholly ahead of o

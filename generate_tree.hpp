@@ -24,6 +24,10 @@ struct GenerateOptions {
     // alone, e.g. the ledger's in-process mirror).
     bool glb = true;
 };
+// K17: every field changes what default options produce, which the extraction
+// table ([treegen_generate_tree]) pins; a new field is a deliberate act that
+// re-records that table. Update this size with it.
+static_assert(sizeof(GenerateOptions) == 2, "GenerateOptions changed: re-record the extraction table");
 
 struct GeneratedTree {
     uint64_t               seed_effective = 0;  // cli_seed ^ fnv1a64(scenario.name)

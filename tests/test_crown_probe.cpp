@@ -36,6 +36,17 @@ constexpr double k_pi = 3.14159265358979323846;
 constexpr cr::Occluders kAll    = cr::Occluders::leaves_and_bark;
 constexpr cr::Occluders kLeaves = cr::Occluders::leaves_only;
 
+// The report's GLB digest computed here, independently of crown::glb_digest:
+// fnv1a64 (det_rng.hpp) over every byte, "0x" and 16 hex digits.
+std::string expected_digest(std::string_view bytes) {
+    char buf[24];
+    std::snprintf(buf, sizeof buf, "0x%016llx", static_cast<unsigned long long>(treegen::fnv1a64(bytes)));
+    return buf;
+}
+std::string expected_digest(const std::vector<uint8_t>& b) {
+    return expected_digest(std::string_view(reinterpret_cast<const char*>(b.data()), b.size()));
+}
+
 // A leaf primitive under construction (positions xyz, uvs, triangle list).
 struct Prim {
     std::vector<float>    pos;
@@ -1033,8 +1044,7 @@ TEST_CASE("[crown_oracle] scenario path and --glb of the written file agree", "[
         CHECK(strip_input(da) == strip_input(db));
         // Both reports name the bytes of the file the tool wrote.
         const std::string file = slurp(glb);
-        const std::string digest = "\"glb_fnv1a64\": \"" +
-            cr::glb_digest(std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(file.data()), file.size())) + "\"";
+        const std::string digest = "\"glb_fnv1a64\": \"" + expected_digest(file) + "\"";
         CHECK(da.find(digest) != std::string::npos);
         CHECK(db.find(digest) != std::string::npos);
     }
@@ -1167,7 +1177,8 @@ TEST_CASE("[crown_oracle] report schema 1: the exact field list", "[treegen][cro
     for (const auto& d : glb_diff) UNSCOPED_INFO("glb input: " << d);
     CHECK(glb_diff.empty());
     // The digest names these bytes.
-    CHECK(doc.find("\"glb_fnv1a64\": \"" + cr::glb_digest(g.glb) + "\"") != std::string::npos);
+    CHECK(doc.find("\"glb_fnv1a64\": \"" + expected_digest(g.glb) + "\"") != std::string::npos);
+    CHECK(glb_doc.find("\"glb_fnv1a64\": \"" + expected_digest(g.glb) + "\"") != std::string::npos);
 
     // Positive control: one field removed is caught.
     std::string cut = doc;

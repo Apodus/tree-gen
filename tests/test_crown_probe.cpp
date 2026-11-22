@@ -13,7 +13,11 @@
 #include "../crown_volume.hpp"
 #include "../det_rng.hpp"
 #include "../external/gltf_view.hpp"
+#include "../generate_tree.hpp"
+#include "../glb_writer.hpp"
 #include "../json_reader.hpp"
+#include "../png_encoder.hpp"
+#include "../scenario.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -1007,12 +1011,14 @@ TEST_CASE("[crown_oracle] the vertex NORMAL never reaches the report (K16)", "[t
     REQUIRE(bytes != g.glb);
 
     const cr::ProbeOptions o = four_directions();
-    const std::string a = cr::probe_glb_report(g.glb, 0, o, "{}");
-    const std::string b = cr::probe_glb_report(bytes, 0, o, "{}");
+    const std::string a = cr::probe_glb_report(g.glb, 0, o, cr::ProbeInput::glb("oak_orig.glb"));
+    const std::string b = cr::probe_glb_report(bytes, 0, o, cr::ProbeInput::glb("oak_mut.glb"));
     CHECK(a.find("\"format\": {") != std::string::npos);   // the axis grid (normals' consumer) is in the report
     CHECK(a.find("\"decision\": \"undecidable\"") == std::string::npos);   // ... with numbers, not nulls
     CHECK(a.find("\"axis_mae\": 0.") != std::string::npos);
-    CHECK(a == b);
+    CHECK(a.find("\"glb_fnv1a64\": \"" + expected_digest(g.glb) + "\"") != std::string::npos);
+    CHECK(b.find("\"glb_fnv1a64\": \"" + expected_digest(bytes) + "\"") != std::string::npos);
+    CHECK(strip_input(a) == strip_input(b));
 }
 
 // ---- What is measured is what ships ----------------------------------------------------------
@@ -1121,13 +1127,18 @@ const std::set<std::string> k_schema_1 = {
     "modes.sunlit.directions[].share", "modes.sunlit.directions[].quartiles", "modes.sunlit.directions[].deciles",
     "modes.sunlit.directions[].eyes", "modes.sunlit.directions[].eyes[].eye_m",
     "modes.sunlit.directions[].eyes[].visible_sites", "modes.sunlit.directions[].eyes[].share",
-    // R-CR6: the standard error beside every sampled statistic.
+    // R-CR6 / P2: the standard error beside every sampled statistic and jitter-dependent count.
+    "tree.crown_ground_projected_area_m2_se", "tree.leaf_area_index_se",
+    "modes.oracle.directions[].silhouette_se", "modes.oracle.directions[].rim_se",
+    "modes.oracle.directions[].body.footprints_se",
     "modes.oracle.directions[].body.mean_se", "modes.oracle.directions[].body.p50_se",
     "modes.oracle.directions[].body.p95_se", "modes.oracle.directions[].body.share_below_0_05_se",
     "modes.oracle.directions[].body_mean_by_min_edge_m_se", "modes.oracle.directions[].body_mean_by_min_edge_m_se.<n>",
     "modes.oracle.directions[].t_by_edge_distance[].mean_se",
     "modes.oracle.directions[].crossings.silhouette.geometric_se", "modes.oracle.directions[].crossings.silhouette.opaque_se",
     "modes.oracle.directions[].crossings.body.geometric_se", "modes.oracle.directions[].crossings.body.opaque_se",
+    "modes.oracle.directions[].ground_plane.silhouette_se",
+    "modes.oracle.directions[].ground_plane.body.footprints_se",
     "modes.oracle.directions[].ground_plane.body.mean_se", "modes.oracle.directions[].ground_plane.body.p50_se",
     "modes.oracle.directions[].ground_plane.body.p95_se", "modes.oracle.directions[].ground_plane.body.share_below_0_05_se",
     "modes.oracle.directions[].ground_plane.body_mean_by_min_edge_m_se",
@@ -1135,6 +1146,7 @@ const std::set<std::string> k_schema_1 = {
     "modes.oracle.directions[].t_by_trunk_distance[].mean_se",
     "modes.oracle.directions[].sunlit_by_depth[].sunlit_share_se",
     "modes.oracle.format.g_se", "modes.oracle.format.clumping_se",
+    "modes.oracle.format.rows[].unsaturated_footprints_se",
     "modes.oracle.format.rows[].saturated_share_se", "modes.oracle.format.rows[].scalar_mae_se",
     "modes.oracle.format.rows[].axis_mae_se", "modes.oracle.format.rows[].g_eff_se",
     "modes.sunlit.open_sky.mean_se", "modes.sunlit.open_sky.p10_se", "modes.sunlit.open_sky.p50_se",
@@ -1165,14 +1177,14 @@ TEST_CASE("[crown_oracle] report schema 1: the exact field list", "[treegen][cro
     o.elevations_deg = {90.0f};
     o.azimuths = 1;
     o.eyes = {vec3{0, -12, 1.7f}};
-    const std::string doc = cr::probe_glb_report(g.glb, 0, o, cr::probe_input_scenario("c3_oak.json", 42, g.glb, 0));
+    const std::string doc = cr::probe_glb_report(g.glb, 0, o, cr::ProbeInput::scenario("c3_oak.json", 42));
     REQUIRE(doc.find("\"schema\": 1,") != std::string::npos);
     REQUIRE(cr::k_report_schema == 1);
     const auto diff = schema_mismatch(doc, k_schema_1_scenario_input);
     for (const auto& d : diff) UNSCOPED_INFO(d);
     CHECK(diff.empty());
     // The same document from --glb: only the input object's source fields differ.
-    const std::string glb_doc = cr::probe_glb_report(g.glb, 0, o, cr::probe_input_glb("oak_42.glb", g.glb, 0));
+    const std::string glb_doc = cr::probe_glb_report(g.glb, 0, o, cr::ProbeInput::glb("oak_42.glb"));
     const auto glb_diff = schema_mismatch(glb_doc, k_schema_1_glb_input);
     for (const auto& d : glb_diff) UNSCOPED_INFO("glb input: " << d);
     CHECK(glb_diff.empty());
@@ -1186,4 +1198,504 @@ TEST_CASE("[crown_oracle] report schema 1: the exact field list", "[treegen][cro
     REQUIRE(at != std::string::npos);
     cut.erase(at, cut.find('\n', at) - at + 1);
     CHECK(schema_mismatch(cut, k_schema_1_scenario_input) == std::set<std::string>{"-tree.leaf_area_index"});
+}
+
+// ---- S-P0b gates (P1-P5, D1-D6) -----------------------------------------------
+
+TEST_CASE("[crown_oracle] G-P1 pin_band floors over zero-SE degenerate ends", "[treegen][crown_oracle]") {
+    SECTION("share at 0 and 1 keeps 1/n floor") {
+        constexpr size_t n = 20;
+        CHECK(cr::detail::se_share(0.0, n) == 0.0);
+        CHECK(cr::detail::se_share(1.0, n) == 0.0);
+        CHECK(cr::pin_band_share(cr::detail::se_share(0.0, n), n) == Approx(1.0 / double(n)));
+        CHECK(cr::pin_band_share(cr::detail::se_share(1.0, n), n) == Approx(1.0 / double(n)));
+    }
+    SECTION("all-zero T mean keeps 1/(rays_per_fp * n) floor") {
+        const std::vector<float> zeros(10, 0.0f);
+        CHECK(cr::detail::se_mean_t(zeros, 64) == 0.0);
+        CHECK(cr::pin_band_mean_t(cr::detail::se_mean_t(zeros, 64), zeros.size(), 64) == Approx(1.0 / 640.0));
+    }
+    SECTION("tied order stats quantile keeps parameterized 1/step_count floor") {
+        const std::vector<float> tied(12, 0.5f);
+        CHECK(cr::detail::se_quantile(tied, 0.5) == 0.0);
+        CHECK(cr::pin_band_quantile(cr::detail::se_quantile(tied, 0.5), 64) == Approx(1.0 / 64.0));
+        CHECK(cr::pin_band_quantile(cr::detail::se_quantile(tied, 0.5), 1024) == Approx(1.0 / 1024.0));
+    }
+    SECTION("count 0 keeps 1.0 floor and non-zero SE scales by 3") {
+        CHECK(cr::pin_band_count(0.0) == Approx(1.0));
+        CHECK(cr::pin_band(0.1, 0.01) == Approx(0.3));
+    }
+}
+
+TEST_CASE("[crown_oracle] G-P2 rim straddling T=0.98 produces non-zero count and area SEs", "[treegen][crown_oracle]") {
+    auto field = [](const treegen::json::value& v, const char* k) -> const treegen::json::value& {
+        const treegen::json::value* f = v.find(k);
+        REQUIRE(f);
+        return *f;
+    };
+
+    // 3.04 x 3.04 m leaf slab (two stacked cards at z = 2.0 and z = 2.5 so the
+    // leaf AABB has non-zero volume): centred at (0, 0), so its edges extend
+    // 0.02 m into the outer 0.5 m footprint ring (4% covered -> T ~ 0.96,
+    // straddling k_silhouette_t = 0.98). Inner [-1.5, 1.5]^2 is fully opaque.
+    Prim p;
+    p.card(vec3{0, 0, 2.0f}, vec3{1, 0, 0}, vec3{0, 1, 0}, 3.04f);
+    p.card(vec3{0, 0, 2.5f}, vec3{1, 0, 0}, vec3{0, 1, 0}, 3.04f);
+    cr::CrownMesh m;
+    m.add_leaves(p.pos, p.uv, p.idx);
+    const cr::Probe probe(std::move(m));
+    cr::ProbeOptions o;
+    o.elevations_deg = {90.0f};
+    o.azimuths = 1;
+    o.sunlit = false;
+    const auto parsed = treegen::json::parse(cr::probe_report_json(probe, o, "{}"));
+    REQUIRE(parsed.ok);
+    const auto& tree = field(parsed.root, "tree");
+    const auto& d0   = field(field(field(parsed.root, "modes"), "oracle"), "directions").a.at(0);
+    const auto& body = field(d0, "body");
+    const auto& gp   = field(d0, "ground_plane");
+    const auto& gpb  = field(gp, "body");
+
+    const double sil_se    = field(d0, "silhouette_se").n;
+    const double rim_se    = field(d0, "rim_se").n;
+    const double bfp_se    = field(body, "footprints_se").n;
+    const double gsil_se   = field(gp, "silhouette_se").n;
+    const double gbfp_se   = field(gpb, "footprints_se").n;
+    const double area      = field(tree, "crown_ground_projected_area_m2").n;
+    const double area_se   = field(tree, "crown_ground_projected_area_m2_se").n;
+    const double opaque_a  = field(tree, "opaque_leaf_area_m2").n;
+    const double lai_se    = field(tree, "leaf_area_index_se").n;
+
+    INFO("sil_se=" << sil_se << " rim_se=" << rim_se << " body_fp_se=" << bfp_se
+                   << " area_se=" << area_se << " lai_se=" << lai_se);
+    CHECK(sil_se > 0.0);
+    CHECK(rim_se > 0.0);
+    CHECK(bfp_se > 0.0);
+    CHECK(gsil_se > 0.0);
+    CHECK(gbfp_se > 0.0);
+    CHECK(area_se > 0.0);
+    CHECK(lai_se > 0.0);
+    CHECK(area_se == Approx(0.25 * sil_se).margin(1e-6));
+    CHECK(lai_se == Approx((opaque_a / (area * area)) * area_se).margin(1e-6));
+
+    // Exact lattice-aligned 3.0 x 3.0 m leaf slab: every T is 0 or 1, so count SEs are 0.
+    Prim exact;
+    exact.card(vec3{0, 0, 2.0f}, vec3{1, 0, 0}, vec3{0, 1, 0}, 3.0f);
+    exact.card(vec3{0, 0, 2.5f}, vec3{1, 0, 0}, vec3{0, 1, 0}, 3.0f);
+    cr::CrownMesh em;
+    em.add_leaves(exact.pos, exact.uv, exact.idx);
+    const cr::Probe eprobe(std::move(em));
+    const auto ep = treegen::json::parse(cr::probe_report_json(eprobe, o, "{}"));
+    REQUIRE(ep.ok);
+    CHECK(field(field(ep.root, "tree"), "crown_ground_projected_area_m2_se").n == 0.0);
+    CHECK(field(field(field(field(ep.root, "modes"), "oracle"), "directions").a.at(0), "silhouette_se").n == 0.0);
+}
+
+TEST_CASE("[crown_oracle] G-P3 exposed SE formulas against closed forms", "[treegen][crown_oracle]") {
+    SECTION("se_mean on constant and two-valued lists") {
+        const std::vector<double> constant{5.0, 5.0, 5.0, 5.0};
+        CHECK(cr::detail::se_mean(constant) == 0.0);
+        // Two-valued {1, 3}: mean 2, sum sq dev 2, sample var = 2/(2-1) = 2, SE = sqrt(2/2) = 1.
+        // Using n instead of n-1 gives sqrt(0.5) != 1.
+        const std::vector<double> two{1.0, 3.0};
+        CHECK(cr::detail::se_mean(two) == Approx(1.0).margin(1e-12));
+        const std::vector<float> four{1.0f, 3.0f, 1.0f, 3.0f};
+        CHECK(cr::detail::se_mean(four) == Approx(std::sqrt(1.0 / 3.0)).margin(1e-6));
+    }
+    SECTION("se_quantile on known ranks and small-n one-sided clamp") {
+        // Non-uniform sorted spacing so off-by-one rank shifts change the spread.
+        const std::vector<float> v{0, 1, 3, 6, 10, 15, 21, 28, 36, 45};
+        // p50, n=10: d = sqrt(2.5) = 1.58114 -> lo_pos = 3.41886 (idx 3 -> 6),
+        // hi_pos = 6.58114 (idx 6 -> 21); interior -> 0.5 * (21 - 6) = 7.5.
+        CHECK(cr::detail::se_quantile(v, 0.50) == Approx(7.5).margin(1e-12));
+        // Small-n p95, n=10: q*n = 9.5, d = sqrt(0.475) = 0.6892 -> hi_pos = 10.1892 > 10
+        // (upper clamp!), lo_pos = 8.8108 (idx 8 -> 36), hi clamps to idx 9 -> 45.
+        // Full one-sided spread = 45 - 36 = 9.0 (halving bug would give 4.5).
+        CHECK(cr::detail::se_quantile(v, 0.95) == Approx(9.0).margin(1e-12));
+        // Small-n p05, n=10: lo_pos = 0.5 - 0.6892 <= 0 (lower clamp!), hi_pos = 1.1892 (idx 1 -> 1).
+        // Full one-sided spread = 1 - 0 = 1.0.
+        CHECK(cr::detail::se_quantile(v, 0.05) == Approx(1.0).margin(1e-12));
+    }
+    SECTION("mae_se on known |err| list") {
+        // {0.1, 0.3, 0.1, 0.3}: mean 0.2, SSE 0.04, var/n = 0.04 / 3 / 4 = 1/300.
+        const std::vector<double> errs{0.1, 0.3, 0.1, 0.3};
+        CHECK(cr::detail::mae_se(errs) == Approx(std::sqrt(1.0 / 300.0)).margin(1e-12));
+    }
+    SECTION("fit_se and analytic derivatives") {
+        cr::FormatFootprint fp;
+        fp.integrals = {{2.0f, 1.5f}};
+        CHECK(cr::detail::dt_scalar(fp, 0.5) == Approx(-2.0 * std::exp(-1.0)).margin(1e-6));
+        CHECK(cr::detail::dt_axis(fp, 0.8)   == Approx(-1.5 * std::exp(-1.2)).margin(1e-6));
+        // SSE = 0.01 + 0.04 + 0.09 + 0.16 = 0.30, n - 1 = 3, J2 = 1 + 4 + 1 + 4 = 10 -> sqrt(0.01) = 0.1.
+        const std::vector<double> res{0.1, -0.2, 0.3, -0.4};
+        const std::vector<double> der{-1.0, -2.0, -1.0, -2.0};
+        CHECK(cr::detail::fit_se(res, der) == Approx(0.1).margin(1e-12));
+    }
+}
+
+TEST_CASE("[crown_oracle] G-P4 re-jitter stability across pinned elevations on fixture tree", "[treegen][crown_oracle]") {
+    const treegen::GeneratedTree& g = rynx::test_support::generated_tree("oak", 42);
+    const cr::Probe probe(cr::load_crown_from_glb(g.glb, 0).mesh);
+    const std::vector<float> elevations = {10.0f, 20.0f, 30.0f, 45.0f, 60.0f, 70.0f, 75.0f, 90.0f};
+    const int rays_fp = cr::rays_per_side(cr::RayStream::selection) * cr::rays_per_side(cr::RayStream::selection);
+    int moved_any = 0;
+
+    // Zenith ground-projected area & LAI via ProbeOptions::selection_stream plumbing.
+    {
+        cr::ProbeOptions oa, ob;
+        oa.oracle = false; oa.sunlit = false; oa.selection_stream = cr::RayStream::selection;
+        ob.oracle = false; ob.sunlit = false; ob.selection_stream = cr::RayStream::selection_alt;
+        const auto pa = treegen::json::parse(cr::probe_report_json(probe, oa, "{}"));
+        const auto pb = treegen::json::parse(cr::probe_report_json(probe, ob, "{}"));
+        REQUIRE(pa.ok);
+        REQUIRE(pb.ok);
+        const auto& ta = *pa.root.find("tree");
+        const auto& tb = *pb.root.find("tree");
+        const double area_a = ta.find("crown_ground_projected_area_m2")->n;
+        const double area_b = tb.find("crown_ground_projected_area_m2")->n;
+        const double area_se = std::hypot(ta.find("crown_ground_projected_area_m2_se")->n,
+                                          tb.find("crown_ground_projected_area_m2_se")->n);
+        const double lai_a = ta.find("leaf_area_index")->n;
+        const double lai_b = tb.find("leaf_area_index")->n;
+        const double lai_se = std::hypot(ta.find("leaf_area_index_se")->n,
+                                         tb.find("leaf_area_index_se")->n);
+        const double fp_area = double(cr::k_footprint_m) * cr::k_footprint_m;
+        const double sil_n = std::max(1.0, area_a / fp_area);
+        INFO("zenith area: " << area_a << " vs " << area_b << " combined se " << area_se);
+        CHECK(std::abs(area_a - area_b) <= cr::pin_band(area_se, fp_area));
+        INFO("zenith lai: " << lai_a << " vs " << lai_b << " combined se " << lai_se);
+        CHECK(std::abs(lai_a - lai_b) <= cr::pin_band(lai_se, lai_a / sil_n));
+        if (area_a != area_b) ++moved_any;
+    }
+
+    // Per pinned elevation (10..90 deg): re-jitter selection vs selection_alt.
+    // Two independent draws X_a, X_b have difference SE = hypot(se_a, se_b).
+    for (float e : elevations) {
+        const cr::SunDirection sun = cr::sun_direction(e, 0.0f);
+        const cr::FootprintSet sa = cr::measure_footprints(probe, sun, cr::PlaneKind::beam, kAll, cr::RayStream::selection);
+        const cr::FootprintSet sb = cr::measure_footprints(probe, sun, cr::PlaneKind::beam, kAll, cr::RayStream::selection_alt);
+        int sil_a = 0, sil_b = 0, rim_a = 0, rim_b = 0;
+        for (const auto& f : sa.footprints) if (f.silhouette()) { ++sil_a; if (!f.body()) ++rim_a; }
+        for (const auto& f : sb.footprints) if (f.silhouette()) { ++sil_b; if (!f.body()) ++rim_b; }
+        const cr::CountSEs csea = cr::footprint_count_se(sa, cr::k_body_edge_m);
+        const cr::CountSEs cseb = cr::footprint_count_se(sb, cr::k_body_edge_m);
+        const auto ba = cr::body_stats(sa, cr::k_body_edge_m);
+        const auto bb = cr::body_stats(sb, cr::k_body_edge_m);
+        INFO("e=" << e << " sil " << sil_a << " vs " << sil_b << " (se " << csea.silhouette_se << "/" << cseb.silhouette_se << ")"
+                  << " rim " << rim_a << " vs " << rim_b << " (se " << csea.rim_se << "/" << cseb.rim_se << ")");
+        CHECK(std::abs(sil_a - sil_b) <= cr::pin_band_count(std::hypot(csea.silhouette_se, cseb.silhouette_se)));
+        CHECK(std::abs(rim_a - rim_b) <= cr::pin_band_count(std::hypot(csea.rim_se, cseb.rim_se)));
+        if (sil_a != sil_b || rim_a != rim_b) ++moved_any;
+        REQUIRE(ba.has_value());
+        REQUIRE(bb.has_value());
+        INFO("e=" << e << " body fp " << ba->footprints << " vs " << bb->footprints << " (se " << ba->footprints_se << "/" << bb->footprints_se << ")"
+                  << " mean " << ba->mean << " vs " << bb->mean << " (se " << ba->mean_se << "/" << bb->mean_se << ")"
+                  << " p50 " << ba->p50 << " vs " << bb->p50 << " (se " << ba->p50_se << "/" << bb->p50_se << ")"
+                  << " p95 " << ba->p95 << " vs " << bb->p95 << " (se " << ba->p95_se << "/" << bb->p95_se << ")"
+                  << " opaque " << ba->share_opaque << " vs " << bb->share_opaque << " (se " << ba->share_opaque_se << "/" << bb->share_opaque_se << ")");
+        CHECK(std::abs(ba->footprints - bb->footprints) <= cr::pin_band_count(std::hypot(ba->footprints_se, bb->footprints_se)));
+        CHECK(std::abs(ba->mean - bb->mean) <= cr::pin_band_mean_t(std::hypot(ba->mean_se, bb->mean_se), size_t(ba->footprints), rays_fp));
+        CHECK(std::abs(ba->p50 - bb->p50) <= cr::pin_band_quantile(std::hypot(ba->p50_se, bb->p50_se), rays_fp));
+        CHECK(std::abs(ba->p95 - bb->p95) <= cr::pin_band_quantile(std::hypot(ba->p95_se, bb->p95_se), rays_fp));
+        CHECK(std::abs(ba->share_opaque - bb->share_opaque) <= cr::pin_band_share(std::hypot(ba->share_opaque_se, bb->share_opaque_se), size_t(ba->footprints)));
+        if (ba->mean != bb->mean) ++moved_any;
+    }
+    CHECK(moved_any > 0);   // positive control: the two streams are genuinely distinct
+}
+
+TEST_CASE("[crown_oracle] G-P5a low-sun slab at 10 and 15 deg", "[treegen][crown_oracle]") {
+    // 40 m x 40 m x 1.0 m slab so at 10 deg a ray spans 1.0 / tan(10 deg) = 5.67 m
+    // horizontally and stays strictly inside slab edges for the central [14, 26]^2
+    // window (14 m margin on every side).
+    SECTION("horizontal slab: T = exp(-L) at 10 and 15 deg") {
+        constexpr float w = 40.0f, d = 1.0f, side = 0.25f;
+        constexpr int cards = 25600;   // 25600 * 0.0625 / 1600 = 1.0
+        const double L = cards * double(side) * side / (double(w) * w);
+        REQUIRE(L == Approx(1.0));
+        const double expected = std::exp(-L);
+        const float elevations[2] = {10.0f, 15.0f};
+        std::vector<double> t[2];
+        for (uint64_t seed = 1; seed <= 4; ++seed) {
+            const cr::Probe probe(card_slab(seed, cards, side, w, d, true));
+            for (int k = 0; k < 2; ++k)
+                t[k].push_back(ray_share(probe, cr::sun_direction(elevations[k], 0.0f).dir, 14.0f, 12.0f, 0.5f, 128, 400 + seed));
+        }
+        for (int k = 0; k < 2; ++k) {
+            const SeedStats s = four_seed(t[k]);
+            INFO("horizontal e = " << elevations[k] << ": mean " << s.mean << " (se " << s.se << "), expected " << expected);
+            CHECK(std::abs(s.mean - expected) <= 0.05 * expected);
+            CHECK(0.05 * expected >= 3.0 * s.se);
+        }
+    }
+    SECTION("random-orientation slab: T = exp(-0.5 L / sin e) at 10 and 15 deg") {
+        // L = 0.25 puts T(10 deg) = 0.487 and T(15 deg) = 0.617 squarely in [0.2, 0.8],
+        // gating oblique cos(e)/sin(e) path length directly at low sun.
+        constexpr float w = 40.0f, d = 1.0f, side = 0.25f;
+        constexpr int cards = 6400;    // 6400 * 0.0625 / 1600 = 0.25
+        const double L = cards * double(side) * side / (double(w) * w);
+        REQUIRE(L == Approx(0.25));
+        const float elevations[2] = {10.0f, 15.0f};
+        std::vector<double> t[2];
+        for (uint64_t seed = 1; seed <= 4; ++seed) {
+            const cr::Probe probe(card_slab(10 + seed, cards, side, w, d, false));
+            for (int k = 0; k < 2; ++k)
+                t[k].push_back(ray_share(probe, cr::sun_direction(elevations[k], 0.0f).dir, 14.0f, 12.0f, 0.5f, 128, 500 + seed));
+        }
+        for (int k = 0; k < 2; ++k) {
+            const double expected = std::exp(-0.5 * L / std::sin(elevations[k] * k_pi / 180.0));
+            REQUIRE(expected >= 0.2);
+            REQUIRE(expected <= 0.8);
+            const SeedStats s = four_seed(t[k]);
+            INFO("random e = " << elevations[k] << ": mean " << s.mean << " (se " << s.se << "), expected " << expected);
+            CHECK(std::abs(s.mean - expected) <= 0.05 * expected);
+            CHECK(0.05 * expected >= 3.0 * s.se);
+        }
+    }
+}
+
+TEST_CASE("[crown_oracle] G-P5b/P5c optical_depth directional (2,1,0) and scalar channel gates", "[treegen][crown_oracle]") {
+    constexpr int n = 9;
+    constexpr float cell = 0.2f;
+    std::vector<float> cells(size_t(n) * n * n * 4, 0.0f);
+    const size_t centre = ((size_t(4) * n + 4) * n + 4) * 4;
+    // Distinct {rho, x, y, z} so any channel swap or mis-indexing fails.
+    cells[centre + 0] = 0.3f;
+    cells[centre + 1] = 0.5f;
+    cells[centre + 2] = 2.0f;
+    cells[centre + 3] = 7.0f;
+    const cr::CrownVolume v = cr::CrownVolume::from_cells(vec3{-0.9f, -0.9f, -0.9f}, cell, n, n, n, cells);
+    // Ray through origin along normalized({2, 1, 0}) crosses [-0.1, 0.1]^3 from
+    // (-0.1, -0.05, 0) to (+0.1, +0.05, 0): exact path length = 0.1 * sqrt(5).
+    const vec3 dir = treegen::normalized(vec3{2.0f, 1.0f, 0.0f});
+    const vec3 origin = -dir * 5.0f;
+    const double len = 0.1 * std::sqrt(5.0);
+
+    SECTION("G-P5b axis_projected along non-symmetric (2, 1, 0)") {
+        const cr::ExtinctionModel axis{cr::ExtinctionKind::axis_projected, 0.5f, 1.0f};
+        // (|2/sqrt5| * 0.5 + |1/sqrt5| * 2.0) * (0.1 * sqrt5) = (1.0 + 2.0) * 0.1 = 0.30.
+        const double expected = (std::abs(double(dir.x)) * 0.5 + std::abs(double(dir.y)) * 2.0) * len;
+        const float tau = v.optical_depth(origin, dir, 0.0f, axis);
+        CHECK(tau == Approx(expected).margin(1e-5));
+        CHECK(tau == v.integrals(origin, dir)[1]);
+    }
+    SECTION("G-P5c scalar extinction reads c[0] * g * clumping") {
+        const cr::ExtinctionModel scalar{cr::ExtinctionKind::scalar, 0.7f, 1.25f};
+        const double expected = 0.7 * 0.3 * len * 1.25;
+        CHECK(v.optical_depth(origin, dir, 0.0f, scalar) == Approx(expected).margin(1e-5));
+    }
+}
+
+TEST_CASE("[crown_oracle] G-D2 load_crown_from_glb decodes 8x8 asymmetric RGBA atlas and alphaCutoff", "[treegen][crown_oracle]") {
+    // 8 x 8 RGBA PNG: rows 0-2 have A = 166 (>= 0.65 * 255 = 165.75, passes) and R = 0;
+    // rows 3-7 have A = 165 (< 165.75, fails at 0.65, but >= 127.5 so passes if cutoff hardcoded to 0.5) and R = 255.
+    std::vector<uint8_t> rgba(8 * 8 * 4, 0);
+    for (int y = 0; y < 8; ++y)
+        for (int x = 0; x < 8; ++x) {
+            const size_t i = (size_t(y) * 8 + size_t(x)) * 4;
+            rgba[i + 0] = y < 3 ? 0 : 255;     // R inverted vs A (catches channel 3 -> 0)
+            rgba[i + 1] = 10;
+            rgba[i + 2] = 20;
+            rgba[i + 3] = y < 3 ? 166 : 165;   // straddles 0.65 * 255 = 165.75; both >= 0.5 * 255
+        }
+    treegen::ImageData img;
+    img.png_bytes = treegen::encode_png_rgba8(8, 8, 8 * 4, rgba.data());
+    REQUIRE_FALSE(img.png_bytes.empty());
+    const std::vector<treegen::ImageData> images = {img, img};
+
+    // 2-triangle 1 m square card at z = 0, UV [0,1]^2 (same layout as (a')).
+    const std::vector<float> pos = {-0.5f, -0.5f, 0.0f,  0.5f, -0.5f, 0.0f,  0.5f, 0.5f, 0.0f,  -0.5f, 0.5f, 0.0f};
+    const std::vector<float> nrm = {0, 0, 1,  0, 0, 1,  0, 0, 1,  0, 0, 1};
+    const std::vector<float> uv  = {0.0f, 0.0f,  1.0f, 0.0f,  1.0f, 1.0f,  0.0f, 1.0f};
+    const std::vector<uint32_t> idx = {0, 1, 2,  0, 2, 3};
+
+    treegen::PrimitiveData prim{};
+    prim.positions   = pos;
+    prim.normals     = nrm;
+    prim.uvs         = uv;
+    prim.indices_u32 = idx;
+    prim.material.alpha_mode             = "MASK";
+    prim.material.alpha_cutoff           = 0.65f;
+    prim.material.base_color_tex_index   = 0;
+    prim.material.translucency_tex_index = 1;
+    prim.material.sampler_index          = 1;
+
+    const treegen::PrimitiveData prims[1] = {prim};
+    treegen::MeshData mesh{};
+    mesh.primitives = prims;
+    const treegen::MeshData meshes[1] = {mesh};
+
+    std::vector<uint8_t> glb;
+    std::string err;
+    REQUIRE(treegen::build_glb_multi_mesh(meshes, images, glb, &err));
+
+    cr::LoadedCrown loaded = cr::load_crown_from_glb(glb, 0);
+    CHECK(loaded.alpha_cutoff == Approx(0.65f));
+    CHECK(loaded.mesh.bark_triangles == 0u);
+    REQUIRE(loaded.mesh.leaf_triangles == 2u);
+    const cr::Probe probe(std::move(loaded.mesh));
+    // Exact (a') coverage integers: tri 0 covers 21/36 opaque texels, tri 1 covers 6/36.
+    CHECK(std::abs(probe.triangle_coverage(0) - 21.0f / 36.0f) <= 1e-6f);
+    CHECK(std::abs(probe.triangle_coverage(1) - 6.0f / 36.0f) <= 1e-6f);
+    // Exact hit pattern: v = 0.2 (y = -0.3, row 1) occluded; v = 0.8 (y = +0.3, row 6) open.
+    CHECK(probe.occluded(vec3{0.0f, -0.3f, -1.0f}, vec3{0, 0, 1}, -1, kAll));
+    CHECK_FALSE(probe.occluded(vec3{0.0f, 0.3f, -1.0f}, vec3{0, 0, 1}, -1, kAll));
+}
+
+TEST_CASE("[crown_oracle] G-D3 two-layer sunlit oblique sun, eyes, open_sky, sunlit_by_depth", "[treegen][crown_oracle]") {
+    auto field = [](const treegen::json::value& v, const char* k) -> const treegen::json::value& {
+        const treegen::json::value* f = v.find(k);
+        REQUIRE(f);
+        return *f;
+    };
+
+    // Asymmetric two-layer crown covering [-0.3, 2.1]^2:
+    // top at z = 3.0: 4 x 4 = 16 cards of side 0.6 m (80% of sites, open_sky = 1.0);
+    // bottom at z = 1.0: 2 x 2 = 4 cards of side 1.2 m (20% of sites, occluded above).
+    // The 16-vs-4 layer asymmetry breaks z-reflection symmetry so flipping +d -> -d
+    // in open_sky changes the distribution as well as ignoring the upper layer.
+    Prim p;
+    for (int i = 0; i < 4; ++i)
+        for (int j = 0; j < 4; ++j)
+            p.card(vec3{0.6f * float(i), 0.6f * float(j), 3.0f}, vec3{1, 0, 0}, vec3{0, 1, 0}, 0.6f);
+    for (int i = 0; i < 2; ++i)
+        for (int j = 0; j < 2; ++j)
+            p.card(vec3{0.3f + 1.2f * float(i), 0.3f + 1.2f * float(j), 1.0f}, vec3{1, 0, 0}, vec3{0, 1, 0}, 1.2f);
+    cr::CrownMesh m;
+    m.add_leaves(p.pos, p.uv, p.idx);
+    REQUIRE(m.sites.size() == 20u);
+    const cr::Probe probe(std::move(m));
+
+    // Analytic open_sky (64 Fibonacci upper-hemisphere directions, exact rect intersection with z = 3.0 sheet).
+    std::vector<vec3> sky_dirs;
+    const double golden = k_pi * (3.0 - std::sqrt(5.0));
+    for (int k = 0; k < cr::k_open_sky_directions; ++k) {
+        const double z = (k + 0.5) / cr::k_open_sky_directions, r = std::sqrt(1.0 - z * z), ph = golden * k;
+        sky_dirs.push_back(vec3{float(r * std::cos(ph)), float(r * std::sin(ph)), float(z)});
+    }
+    std::vector<float> expected_sky;
+    for (const auto& st : probe.mesh().sites) {
+        int open = 0;
+        for (const vec3& d : sky_dirs) {
+            bool hit = false;
+            if (st.centroid.z < 2.0f) {
+                const float t = (3.0f - st.centroid.z) / d.z;
+                const float x = st.centroid.x + t * d.x, y = st.centroid.y + t * d.y;
+                hit = (x >= -0.3f && x <= 2.1f && y >= -0.3f && y <= 2.1f);
+            }
+            if (!hit) ++open;
+        }
+        expected_sky.push_back(float(open) / float(sky_dirs.size()));
+    }
+    std::sort(expected_sky.begin(), expected_sky.end());
+    double exp_sky_mean = 0.0;
+    for (float x : expected_sky) exp_sky_mean += x;
+    exp_sky_mean /= double(expected_sky.size());
+    auto pct = [&](double q) {
+        const size_t k = static_cast<size_t>(std::ceil(q * double(expected_sky.size())));
+        return double(expected_sky[std::min(expected_sky.size() - 1, k == 0 ? 0 : k - 1)]);
+    };
+    REQUIRE(pct(0.10) < 0.90);   // bottom layer is genuinely shadowed by the upper layer
+    REQUIRE(pct(0.50) == 1.0);   // 16 of 20 sites sit on the unoccluded top layer
+
+    // Oblique sun 45 deg, azimuth 30 deg (azimuths = 12 -> index 1 is az = 30 deg).
+    cr::ProbeOptions o;
+    o.oracle = true;
+    o.sunlit = true;
+    o.elevations_deg = {45.0f};
+    o.azimuths = 12;
+    o.eyes = {vec3{0.9f, 0.9f, -10.0f}, vec3{0.9f, 0.9f, 10.0f}};
+    const auto parsed = treegen::json::parse(cr::probe_report_json(probe, o, "{}"));
+    REQUIRE(parsed.ok);
+
+    // open_sky checks (16 top sites = 1.0, 4 bottom sites occluded by top layer).
+    const auto& sky = field(field(field(parsed.root, "modes"), "sunlit"), "open_sky");
+    CHECK(field(sky, "mean").n == Approx(exp_sky_mean).margin(1e-5));
+    CHECK(field(sky, "p10").n  == Approx(pct(0.10)).margin(1e-5));
+    CHECK(field(sky, "p50").n  == Approx(1.0).margin(1e-5));
+    CHECK(field(sky, "p90").n  == Approx(1.0).margin(1e-5));
+
+    // Sunlit direction (45 deg, az 30 deg): ray from bottom (x, y, 1) hits z=3 at
+    // (x + 2*cos(30), y + 2*sin(30)) = (x + 1.732, y + 1.0). Inside [-0.3, 2.1]^2
+    // only for (0.3, 0.3, 1.0) -> (2.032, 1.3): 1 bottom site shadowed, 3 bottom + 16 top = 19/20 lit.
+    const auto& sdirs = field(field(field(parsed.root, "modes"), "sunlit"), "directions").a;
+    const treegen::json::value* sd30 = nullptr;
+    for (const auto& d : sdirs)
+        if (std::abs(field(d, "azimuth_deg").n - 30.0) < 1e-3) { sd30 = &d; break; }
+    REQUIRE(sd30 != nullptr);
+    CHECK(field(*sd30, "share").n == Approx(19.0 / 20.0).margin(1e-6));
+
+    // Below-crown eye sees only the 4 bottom sites (3/4 lit); above-crown eye sees only 16 top (16/16 lit).
+    const auto& eyes = field(*sd30, "eyes").a;
+    REQUIRE(eyes.size() == 2u);
+    CHECK(field(eyes[0], "visible_sites").n == 4.0);
+    CHECK(field(eyes[0], "share").n == Approx(3.0 / 4.0).margin(1e-6));
+    CHECK(field(eyes[1], "visible_sites").n == 16.0);
+    CHECK(field(eyes[1], "share").n == Approx(1.0).margin(1e-6));
+
+    // sunlit_by_depth at oblique 45 deg, az 30 deg: match analytic bins.
+    const auto& odirs = field(field(field(parsed.root, "modes"), "oracle"), "directions").a;
+    const treegen::json::value* od30 = nullptr;
+    for (const auto& d : odirs)
+        if (std::abs(field(d, "azimuth_deg").n - 30.0) < 1e-3) { od30 = &d; break; }
+    REQUIRE(od30 != nullptr);
+    const vec3 s30 = cr::sun_direction(45.0f, 30.0f).dir;
+    const float top30 = treegen::dot(vec3{2.1f, 2.1f, 3.0f}, s30);
+    std::map<int, std::pair<int, int>> exp_bins;
+    for (const auto& st : probe.mesh().sites) {
+        const int bin = int(std::floor((top30 - treegen::dot(st.centroid, s30)) / 0.5f));
+        const bool is_bot = st.centroid.z < 2.0f;
+        const bool shadowed = is_bot && st.centroid.x < 0.9f && st.centroid.y < 0.9f;
+        ++exp_bins[bin].first;
+        exp_bins[bin].second += shadowed ? 0 : 1;
+    }
+    const auto& got_bins = field(*od30, "sunlit_by_depth").a;
+    REQUIRE(got_bins.size() == exp_bins.size());
+    size_t bi = 0;
+    for (const auto& [k, cnt] : exp_bins) {
+        CHECK(field(got_bins[bi], "depth_min_m").n == Approx(k * 0.5).margin(1e-5));
+        CHECK(field(got_bins[bi], "sites").n == double(cnt.first));
+        CHECK(field(got_bins[bi], "sunlit_share").n == Approx(double(cnt.second) / double(cnt.first)).margin(1e-6));
+        ++bi;
+    }
+
+    // Zenith sunlit_by_depth: exact 2 bins [0.0, 0.5) (16 sites, 1.0) and [2.0, 2.5) (4 sites, 0.0).
+    cr::ProbeOptions oz;
+    oz.oracle = true;
+    oz.sunlit = false;
+    oz.elevations_deg = {90.0f};
+    oz.azimuths = 1;
+    const auto pz = treegen::json::parse(cr::probe_report_json(probe, oz, "{}"));
+    REQUIRE(pz.ok);
+    const auto& zbins = field(field(field(field(pz.root, "modes"), "oracle"), "directions").a.at(0), "sunlit_by_depth").a;
+    REQUIRE(zbins.size() == 2u);
+    CHECK(field(zbins[0], "depth_min_m").n == Approx(0.0));
+    CHECK(field(zbins[0], "sites").n == 16.0);
+    CHECK(field(zbins[0], "sunlit_share").n == Approx(1.0));
+    CHECK(field(zbins[1], "depth_min_m").n == Approx(2.0));
+    CHECK(field(zbins[1], "sites").n == 4.0);
+    CHECK(field(zbins[1], "sunlit_share").n == Approx(0.0));
+}
+
+TEST_CASE("[crown_oracle] G-D4 emit_levels rejects mismatched scenario_fnv and probe_glb_report hashes actual bytes", "[treegen][crown_oracle]") {
+    SECTION("emit_levels throws on mismatched GrownTree::scenario_fnv") {
+        const treegen::Scenario oak  = treegen::load_scenario(rynx::test_support::treegen_file("scenarios/c3_oak.json"));
+        const treegen::Scenario pine = treegen::load_scenario(rynx::test_support::treegen_file("scenarios/c3_pine.json"));
+        REQUIRE(oak.scenario_fnv != pine.scenario_fnv);
+        const treegen::GrownTree grown = treegen::grow_tree(oak, 42);
+        CHECK(grown.scenario_fnv == oak.scenario_fnv);
+        CHECK_THROWS_AS(treegen::emit_levels(pine, grown), std::logic_error);
+        treegen::GrownTree tampered = grown;
+        tampered.scenario_fnv ^= 1ull;
+        CHECK_THROWS_AS(treegen::emit_levels(oak, std::move(tampered)), std::logic_error);
+        CHECK_NOTHROW(treegen::emit_levels(oak, grown));
+    }
+    SECTION("probe_glb_report computes glb_fnv1a64 and probe_lod from actual probed bytes and lod") {
+        const treegen::GeneratedTree& g = rynx::test_support::generated_tree("oak", 42);
+        cr::ProbeOptions o;
+        o.oracle = false;
+        o.sunlit = false;
+        const std::string doc = cr::probe_glb_report(g.glb, 1, o, cr::ProbeInput::glb("oak_lod1.glb"));
+        CHECK(doc.find("\"probe_lod\": 1") != std::string::npos);
+        CHECK(doc.find("\"glb_fnv1a64\": \"" + expected_digest(g.glb) + "\"") != std::string::npos);
+    }
 }

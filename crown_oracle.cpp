@@ -5,6 +5,7 @@
 #include "det_rng.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <cstdio>
 #include <limits>
@@ -80,34 +81,63 @@ float percentile(std::vector<float> v, double q) {
     return v[std::min(v.size() - 1, k == 0 ? 0 : k - 1)];
 }
 
-// ---- SE (R-CR6; the definitions are stated at RegionStats) ----------------------
-// Mean of footprint T, each the open share of `rays` jittered rays.
-double se_mean_t(const std::vector<float>& t, int rays) {
-    if (t.empty()) return 0.0;
-    double v = 0.0;
-    for (float x : t) v += double(x) * (1.0 - x);
-    return std::sqrt(v / rays) / double(t.size());
-}
-// A share p over n footprints or sites.
-double se_share(double p, size_t n) { return n ? std::sqrt(std::max(0.0, p * (1.0 - p)) / double(n)) : 0.0; }
-// Mean over n independent items.
-template <class T> double se_mean(const std::vector<T>& x) {
+// ---- SE helpers (R-CR6 / P1 / P2 / P3) -----------------------------------------
+template <class T> double sample_variance_over_n(std::span<const T> x) {
     if (x.size() < 2) return 0.0;
     double m = 0.0;
     for (const T& v : x) m += double(v);
     m /= double(x.size());
     double s = 0.0;
     for (const T& v : x) s += (double(v) - m) * (double(v) - m);
-    return std::sqrt(s / double(x.size() - 1) / double(x.size()));
+    return s / double(x.size() - 1) / double(x.size());
 }
-// Quantile q of n values: half the spread of the order statistics one binomial
-// SE (sqrt(n q (1 - q)) ranks) either side of its rank.
-double se_quantile(std::vector<float> v, double q) {
-    if (v.size() < 2) return 0.0;
-    std::sort(v.begin(), v.end());
-    const double n = double(v.size()), d = std::sqrt(n * q * (1.0 - q));
-    auto at = [&](double rank) { return double(v[size_t(std::clamp(rank, 0.0, n - 1.0))]); };
-    return 0.5 * (at(std::ceil(q * n + d) - 1.0) - at(std::ceil(q * n - d) - 1.0));
+
+// Exact Binomial(R, p) probability P(lo <= X <= hi).
+double binom_prob_range(int R, double p, int lo, int hi) {
+    if (R <= 0 || lo > hi) return 0.0;
+    if (p <= 0.0) return (lo <= 0 && 0 <= hi) ? 1.0 : 0.0;
+    if (p >= 1.0) return (lo <= R && R <= hi) ? 1.0 : 0.0;
+    const int a = std::max(0, lo);
+    const int b = std::min(R, hi);
+    if (a > b) return 0.0;
+    const double lgr = std::lgamma(double(R) + 1.0);
+    const double lp = std::log(p);
+    const double lq = std::log(1.0 - p);
+    double sum = 0.0;
+    for (int x = a; x <= b; ++x) {
+        const double lpmf = lgr - std::lgamma(double(x) + 1.0) - std::lgamma(double(R - x) + 1.0)
+                          + double(x) * lp + double(R - x) * lq;
+        sum += std::exp(lpmf);
+    }
+    return std::clamp(sum, 0.0, 1.0);
+}
+
+int max_silhouette_open(int R) {
+    int hi = -1;
+    for (int x = 0; x <= R; ++x)
+        if (float(x) / float(R) < k_silhouette_t) hi = x;
+    return hi;
+}
+
+std::pair<int, int> unsaturated_open_range(int R) {
+    int lo = R + 1, hi = -1;
+    for (int x = 0; x <= R; ++x) {
+        const float t = float(x) / float(R);
+        if (t >= k_opaque_t && t <= k_unsaturated_hi) {
+            lo = std::min(lo, x);
+            hi = std::max(hi, x);
+        }
+    }
+    return {lo, hi};
+}
+
+double footprint_open_prob(const Footprint& f, int& out_rays) {
+    if (f.ray_count > 0) {
+        out_rays = int(f.ray_count);
+        return double(std::popcount(f.open_mask)) / double(out_rays);
+    }
+    out_rays = rays_per_side(RayStream::selection) * rays_per_side(RayStream::selection);
+    return std::clamp(double(f.t), 0.0, 1.0);
 }
 
 vec3 bounds_centre(const Probe& p) { return (p.bounds_min() + p.bounds_max()) * 0.5f; }
@@ -136,7 +166,99 @@ double t_axis(const FormatFootprint& f, double c) {
     return s / double(f.integrals.size());
 }
 
+std::string format_probe_input(const ProbeInput& input, std::span<const uint8_t> glb, int lod) {
+    if (input.kind == ProbeInputKind::scenario) {
+        return "{\"source\": \"scenario\", \"scenario\": " + json_string(input.path) + ", \"seed\": " +
+               std::to_string(input.seed) + ", \"glb_fnv1a64\": " + json_string(glb_digest(glb)) + ", \"probe_lod\": " +
+               std::to_string(lod) + "}";
+    }
+    return "{\"source\": \"glb\", \"glb\": " + json_string(input.path) + ", \"glb_fnv1a64\": " +
+           json_string(glb_digest(glb)) + ", \"probe_lod\": " + std::to_string(lod) + "}";
+}
+
 }  // namespace
+
+namespace detail {
+
+double se_mean_t(std::span<const float> t, int rays) {
+    if (t.empty() || rays <= 0) return 0.0;
+    double v = 0.0;
+    for (float x : t) v += double(x) * (1.0 - x);
+    return std::sqrt(std::max(0.0, v) / double(rays)) / double(t.size());
+}
+
+double se_share(double p, size_t n) {
+    return n ? std::sqrt(std::max(0.0, p * (1.0 - p)) / double(n)) : 0.0;
+}
+
+double se_mean(std::span<const double> x) { return std::sqrt(sample_variance_over_n(x)); }
+double se_mean(std::span<const float> x)  { return std::sqrt(sample_variance_over_n(x)); }
+
+// Quantile q of n values: half the spread of the order statistics one binomial
+// SE (sqrt(n q (1 - q)) ranks) either side of its rank. When one side clamps at
+// the sample boundary (q*n - d <= 0 or q*n + d > n), use the full one-sided
+// spread instead of halving it (P1).
+double se_quantile(std::vector<float> v, double q) {
+    if (v.size() < 2) return 0.0;
+    std::sort(v.begin(), v.end());
+    const double n = double(v.size()), d = std::sqrt(n * q * (1.0 - q));
+    const double lo_pos = q * n - d;
+    const double hi_pos = q * n + d;
+    const bool one_sided = (lo_pos <= 0.0) || (hi_pos > n);
+    auto at = [&](double rank) { return double(v[size_t(std::clamp(rank, 0.0, n - 1.0))]); };
+    const double spread = at(std::ceil(hi_pos) - 1.0) - at(std::ceil(lo_pos) - 1.0);
+    return one_sided ? spread : 0.5 * spread;
+}
+
+double mae_se(std::span<const double> abs_errors) {
+    return std::sqrt(sample_variance_over_n(abs_errors));
+}
+
+double fit_se(std::span<const double> residuals, std::span<const double> derivatives) {
+    if (residuals.size() != derivatives.size())
+        throw std::logic_error("fit_se: residuals and derivatives size mismatch");
+    const size_t n = residuals.size();
+    if (n < 2) return 0.0;
+    double s = 0.0, j2 = 0.0;
+    for (size_t i = 0; i < n; ++i) {
+        s  += residuals[i] * residuals[i];
+        j2 += derivatives[i] * derivatives[i];
+    }
+    return j2 > 0.0 ? std::sqrt(s / double(n - 1) / j2) : 0.0;
+}
+
+double dt_scalar(const FormatFootprint& f, double g) {
+    double s = 0.0;
+    for (const auto& r : f.integrals) s -= r[0] * std::exp(-g * r[0]);
+    return s / double(f.integrals.size());
+}
+
+double dt_axis(const FormatFootprint& f, double c) {
+    double s = 0.0;
+    for (const auto& r : f.integrals) s -= r[1] * std::exp(-c * r[1]);
+    return s / double(f.integrals.size());
+}
+
+}  // namespace detail
+
+double pin_band(double se, double resolution_floor) {
+    return std::max(3.0 * se, resolution_floor);
+}
+double pin_band_share(double se, size_t n) {
+    return pin_band(se, n > 0 ? 1.0 / double(n) : 1.0);
+}
+double pin_band_mean_t(double se, size_t footprints, int rays_per_footprint) {
+    const double floor = (footprints > 0 && rays_per_footprint > 0)
+                             ? 1.0 / (double(rays_per_footprint) * double(footprints))
+                             : 1.0;
+    return pin_band(se, floor);
+}
+double pin_band_quantile(double se, int step_count) {
+    return pin_band(se, step_count > 0 ? 1.0 / double(step_count) : 1.0);
+}
+double pin_band_count(double se) {
+    return pin_band(se, 1.0);
+}
 
 std::string json_string(const std::string& s) {
     std::string q = "\"";
@@ -166,17 +288,6 @@ std::string glb_digest(std::span<const uint8_t> glb) {
     return buf;
 }
 
-std::string probe_input_scenario(const std::string& scenario_path, uint64_t seed, std::span<const uint8_t> glb, int lod) {
-    return "{\"source\": \"scenario\", \"scenario\": " + json_string(scenario_path) + ", \"seed\": " +
-           std::to_string(seed) + ", \"glb_fnv1a64\": " + json_string(glb_digest(glb)) + ", \"probe_lod\": " +
-           std::to_string(lod) + "}";
-}
-
-std::string probe_input_glb(const std::string& glb_path, std::span<const uint8_t> glb, int lod) {
-    return "{\"source\": \"glb\", \"glb\": " + json_string(glb_path) + ", \"glb_fnv1a64\": " + json_string(glb_digest(glb)) +
-           ", \"probe_lod\": " + std::to_string(lod) + "}";
-}
-
 SunDirection sun_direction(float elevation_deg, float azimuth_deg) {
     const double e = elevation_deg * k_pi / 180.0, a = azimuth_deg * k_pi / 180.0;
     SunDirection s;
@@ -196,7 +307,14 @@ std::vector<SunDirection> sun_directions(const std::vector<float>& elevations_de
 }
 
 int rays_per_side(RayStream s) { return s == RayStream::format ? k_format_rays_per_side : k_rays_per_side; }
-uint64_t stream_id(RayStream s) { return s == RayStream::format ? k_format_ray_stream : k_footprint_ray_stream; }
+uint64_t stream_id(RayStream s) {
+    switch (s) {
+        case RayStream::selection:     return k_footprint_ray_stream;
+        case RayStream::selection_alt: return k_footprint_alt_ray_stream;
+        case RayStream::format:        return k_format_ray_stream;
+    }
+    return k_footprint_ray_stream;
+}
 
 void FootprintSet::rays(size_t k, std::vector<vec3>& out, RayStream s) const {
     const Footprint& f = footprints[k];
@@ -213,11 +331,15 @@ void FootprintSet::rays(size_t k, std::vector<vec3>& out, RayStream s) const {
         }
 }
 
-FootprintSet measure_footprints(const Probe& probe, const SunDirection& sun, PlaneKind kind, Occluders occ) {
+FootprintSet measure_footprints(const Probe& probe, const SunDirection& sun, PlaneKind kind, Occluders occ,
+                                RayStream selection_stream) {
+    if (selection_stream == RayStream::format)
+        throw std::logic_error("crown probe: measure_footprints expects a selection RayStream, not RayStream::format");
     FootprintSet set;
     set.sun = sun;
     set.kind = kind;
     set.occluders = occ;
+    set.selection_stream = selection_stream;
     const vec3 s = sun.dir;
     const vec3 c = bounds_centre(probe);
     const float diag = bounds_diag(probe) + 1.0f;
@@ -259,6 +381,7 @@ FootprintSet measure_footprints(const Probe& probe, const SunDirection& sun, Pla
     if (umin > umax) return set;   // empty mesh
     const int i0 = int(std::floor(umin / k_footprint_m)) - 1, i1 = int(std::ceil(umax / k_footprint_m)) + 1;
     const int j0 = int(std::floor(vmin / k_footprint_m)) - 1, j1 = int(std::ceil(vmax / k_footprint_m)) + 1;
+    set.i0 = i0; set.i1 = i1; set.j0 = j0; set.j1 = j1;
     for (int j = j0; j < j1; ++j)
         for (int i = i0; i < i1; ++i) {
             Footprint f;
@@ -271,17 +394,23 @@ FootprintSet measure_footprints(const Probe& probe, const SunDirection& sun, Pla
 
     parallel_for(set.footprints.size(), [&](size_t k) {
         std::vector<vec3> rays;
-        set.rays(k, rays, RayStream::selection);
+        set.rays(k, rays, selection_stream);
         int open = 0;
+        uint64_t mask = 0;
         long geo = 0, opq = 0;
-        for (const vec3& o : rays) {
-            const LineHits h = probe.line_hits(o, s, t_max);
-            if (!h.occluded(occ)) ++open;
+        for (size_t ri = 0; ri < rays.size(); ++ri) {
+            const LineHits h = probe.line_hits(rays[ri], s, t_max);
+            if (!h.occluded(occ)) {
+                ++open;
+                mask |= (uint64_t(1) << ri);
+            }
             geo += h.leaf_geometric;
             opq += h.leaf_opaque;
         }
         Footprint& f = set.footprints[k];
         f.t = float(open) / float(rays.size());
+        f.open_mask = mask;
+        f.ray_count = static_cast<uint8_t>(rays.size());
         f.crossings_geometric = float(geo) / float(rays.size());
         f.crossings_opaque    = float(opq) / float(rays.size());
     });
@@ -311,7 +440,175 @@ FootprintSet measure_footprints(const Probe& probe, const SunDirection& sun, Pla
     return set;
 }
 
-std::optional<RegionStats> body_stats(const FootprintSet& set, float min_edge_m) {
+CountSEs footprint_count_se(const FootprintSet& set, float min_edge_m) {
+    CountSEs out;
+    const size_t n = set.footprints.size();
+    if (n == 0) return out;
+
+    // Independent binomial crossing variance for silhouette count (P2):
+    // every footprint with 0 < open < R contributes q_k(1 - q_k), not only +-1/R.
+    // A footprint with open == R whose rays still intersected leaf card geometry
+    // (crossings_geometric > 0, all transparent on this draw) uses a 0.5-hit
+    // continuity estimate p = (R - 0.5) / R so zero-hit boundary cards are not
+    // treated as zero-variance empty sky.
+    std::vector<double> p_open(n, 1.0);
+    std::vector<int>    r_cnt(n, 0);
+    std::vector<double> q_sil(n, 0.0);
+    std::vector<size_t> uncertain;
+    double sil_var = 0.0;
+    for (size_t k = 0; k < n; ++k) {
+        int R = 0;
+        double p = footprint_open_prob(set.footprints[k], R);
+        if (p >= 1.0 && set.footprints[k].crossings_geometric > 0.0f && R > 1)
+            p = (double(R) - 0.5) / double(R);
+        p_open[k] = p;
+        r_cnt[k] = R;
+        const double q = binom_prob_range(R, p, 0, max_silhouette_open(R));
+        q_sil[k] = q;
+        if (p > 0.0 && p < 1.0) {
+            sil_var += q * (1.0 - q);
+            uncertain.push_back(k);
+        }
+    }
+    out.silhouette_se = std::sqrt(sil_var);
+    if (uncertain.empty()) return out;
+
+    // Spatially coupled counts and body stats (body.footprints, rim, body.mean,
+    // p50, p95, share_opaque): bootstrap over the 64 stored ray hits with exact
+    // edge_distance >= min_edge_m recomputation. Resampling open_boot ~ Binomial(R, p_k)
+    // per uncertain footprint has the exact joint distribution of a 64-ray
+    // nonparametric bootstrap and captures both ray jitter and membership cascades.
+    const int w = set.i1 - set.i0, h = set.j1 - set.j0;
+    if (w <= 0 || h <= 0 || size_t(w) * size_t(h) != n) return out;
+
+    const int rad = std::max(1, int(std::ceil(min_edge_m / k_footprint_m)));
+    std::vector<std::pair<int, int>> offsets;
+    for (int dj = -rad; dj <= rad; ++dj)
+        for (int di = -rad; di <= rad; ++di) {
+            if (di == 0 && dj == 0) continue;
+            if (std::hypot(float(di) * k_footprint_m, float(dj) * k_footprint_m) < min_edge_m)
+                offsets.push_back({di, dj});
+        }
+
+    // Build exact Binomial(R, p_k) CDFs for each distinct (R, p_k) among uncertain footprints.
+    std::map<std::pair<int, int>, std::vector<double>> cdf_cache;
+    std::vector<const std::vector<double>*> cdf_of(uncertain.size(), nullptr);
+    for (size_t ui = 0; ui < uncertain.size(); ++ui) {
+        const size_t k = uncertain[ui];
+        const int R = r_cnt[k];
+        const int key_p = int(std::lround(p_open[k] * double(2 * R)));
+        auto [it, fresh] = cdf_cache.try_emplace({R, key_p});
+        if (fresh) {
+            auto& cdf = it->second;
+            cdf.resize(size_t(R + 1));
+            const double p = p_open[k];
+            const double lgr = std::lgamma(double(R) + 1.0);
+            const double lp = std::log(p), lq = std::log(1.0 - p);
+            double acc = 0.0;
+            for (int x = 0; x <= R; ++x) {
+                acc += std::exp(lgr - std::lgamma(double(x) + 1.0) - std::lgamma(double(R - x) + 1.0)
+                                + double(x) * lp + double(R - x) * lq);
+                cdf[size_t(x)] = acc;
+            }
+            cdf.back() = 1.0;
+        }
+        cdf_of[ui] = &it->second;
+    }
+
+    std::vector<float> t_base(n, 1.0f);
+    std::vector<uint8_t> sil_base(n, 0);
+    for (size_t k = 0; k < n; ++k) {
+        t_base[k] = set.footprints[k].t;
+        sil_base[k] = set.footprints[k].silhouette() ? 1 : 0;
+    }
+
+    constexpr int k_boot = 256;
+    std::vector<double> body_counts, rim_counts, body_means, body_p50s, body_p95s, body_opaques;
+    body_counts.reserve(k_boot);
+    rim_counts.reserve(k_boot);
+    body_means.reserve(k_boot);
+    body_p50s.reserve(k_boot);
+    body_p95s.reserve(k_boot);
+    body_opaques.reserve(k_boot);
+
+    std::vector<float> t_cur(n);
+    std::vector<uint8_t> sil(n);
+    std::vector<float> body_t;
+    body_t.reserve(n);
+    pcg32 rng;
+    rng.seed(0xB00757A9ull, 0xC00475Eull);
+    for (int b = 0; b < k_boot; ++b) {
+        t_cur = t_base;
+        sil = sil_base;
+        for (size_t ui = 0; ui < uncertain.size(); ++ui) {
+            const size_t k = uncertain[ui];
+            const auto& cdf = *cdf_of[ui];
+            const double u = (double(rng.next_u32()) + 0.5) / 4294967296.0;
+            const auto it = std::lower_bound(cdf.begin(), cdf.end(), u);
+            const int x = int(std::min<size_t>(size_t(it - cdf.begin()), cdf.size() - 1));
+            const float tv = float(x) / float(r_cnt[k]);
+            t_cur[k] = tv;
+            sil[k] = tv < k_silhouette_t ? 1 : 0;
+        }
+        int body_n = 0, rim_n = 0, opq_n = 0;
+        double sum_t = 0.0;
+        body_t.clear();
+        for (int j = 0; j < h; ++j)
+            for (int i = 0; i < w; ++i) {
+                const size_t k = size_t(j) * size_t(w) + size_t(i);
+                if (!sil[k]) continue;
+                bool near_out = false;
+                for (const auto& [di, dj] : offsets) {
+                    const int ii = i + di, jj = j + dj;
+                    if (ii < 0 || ii >= w || jj < 0 || jj >= h || !sil[size_t(jj) * size_t(w) + size_t(ii)]) {
+                        near_out = true;
+                        break;
+                    }
+                }
+                if (near_out) {
+                    ++rim_n;
+                } else {
+                    ++body_n;
+                    const float tv = t_cur[k];
+                    body_t.push_back(tv);
+                    sum_t += tv;
+                    if (tv < k_opaque_t) ++opq_n;
+                }
+            }
+        body_counts.push_back(double(body_n));
+        rim_counts.push_back(double(rim_n));
+        if (!body_t.empty()) {
+            body_means.push_back(sum_t / double(body_t.size()));
+            body_opaques.push_back(double(opq_n) / double(body_t.size()));
+            std::sort(body_t.begin(), body_t.end());
+            auto pct = [&](double q) {
+                const size_t idx = static_cast<size_t>(std::ceil(q * double(body_t.size())));
+                return double(body_t[std::min(body_t.size() - 1, idx == 0 ? 0 : idx - 1)]);
+            };
+            body_p50s.push_back(pct(0.50));
+            body_p95s.push_back(pct(0.95));
+        }
+    }
+    auto sample_sd = [](const std::vector<double>& v) {
+        if (v.size() < 2) return 0.0;
+        double m = 0.0;
+        for (double x : v) m += x;
+        m /= double(v.size());
+        double s = 0.0;
+        for (double x : v) s += (x - m) * (x - m);
+        return std::sqrt(s / double(v.size() - 1));
+    };
+    out.body_footprints_se   = sample_sd(body_counts);
+    out.rim_se               = sample_sd(rim_counts);
+    out.body_mean_se         = sample_sd(body_means);
+    out.body_p50_se          = sample_sd(body_p50s);
+    out.body_p95_se          = sample_sd(body_p95s);
+    out.body_share_opaque_se = sample_sd(body_opaques);
+    return out;
+}
+
+namespace {
+std::optional<RegionStats> body_stats_impl(const FootprintSet& set, float min_edge_m, const CountSEs* precomputed_se, bool with_count_se) {
     std::vector<float> t;
     for (const Footprint& f : set.footprints)
         if (f.in_body(min_edge_m)) t.push_back(f.t);
@@ -325,15 +622,34 @@ std::optional<RegionStats> body_stats(const FootprintSet& set, float min_edge_m)
     r.share_opaque = float(double(opaque) / double(t.size()));
     r.p50 = percentile(t, 0.50);
     r.p95 = percentile(t, 0.95);
-    r.mean_se = float(se_mean_t(t, rays_per_side(RayStream::selection) * rays_per_side(RayStream::selection)));
-    r.share_opaque_se = float(se_share(r.share_opaque, t.size()));
-    r.p50_se = float(se_quantile(t, 0.50));
-    r.p95_se = float(se_quantile(t, 0.95));
+    const double analytic_mean_se   = detail::se_mean_t(t, rays_per_side(RayStream::selection) * rays_per_side(RayStream::selection));
+    const double analytic_share_se  = detail::se_share(r.share_opaque, t.size());
+    const double analytic_p50_se    = detail::se_quantile(t, 0.50);
+    const double analytic_p95_se    = detail::se_quantile(t, 0.95);
+    if (precomputed_se || with_count_se) {
+        const CountSEs owned = precomputed_se ? CountSEs{} : footprint_count_se(set, min_edge_m);
+        const CountSEs& cse = precomputed_se ? *precomputed_se : owned;
+        r.footprints_se   = float(cse.body_footprints_se);
+        r.mean_se         = float(std::max(analytic_mean_se, cse.body_mean_se));
+        r.p50_se          = float(std::max(analytic_p50_se, cse.body_p50_se));
+        r.p95_se          = float(std::max(analytic_p95_se, cse.body_p95_se));
+        r.share_opaque_se = float(std::max(analytic_share_se, cse.body_share_opaque_se));
+    } else {
+        r.mean_se         = float(analytic_mean_se);
+        r.share_opaque_se = float(analytic_share_se);
+        r.p50_se          = float(analytic_p50_se);
+        r.p95_se          = float(analytic_p95_se);
+    }
     return r;
+}
+}  // namespace
+
+std::optional<RegionStats> body_stats(const FootprintSet& set, float min_edge_m) {
+    return body_stats_impl(set, min_edge_m, nullptr, true);
 }
 
 bool body_opaque(const FootprintSet& beam) {
-    const auto body = body_stats(beam, k_body_edge_m);
+    const auto body = body_stats_impl(beam, k_body_edge_m, nullptr, false);
     return body && body->share_opaque >= k_stop_body_share;
 }
 
@@ -363,6 +679,11 @@ void add_format_footprints(const Probe& probe, const FootprintSet& set, const Cr
     for (size_t k = 0; k < set.footprints.size(); ++k) {
         const Footprint& f = set.footprints[k];
         if (keep && !keep(f)) continue;
+        int R = 0;
+        const double p = footprint_open_prob(f, R);
+        const auto [ulo, uhi] = unsaturated_open_range(R);
+        const double qu = binom_prob_range(R, p, ulo, uhi);
+        into.unsaturated_var += qu * (1.0 - qu);
         if (f.silhouette()) {
             ++into.silhouette;
             if (f.t < k_opaque_t) ++into.saturated;
@@ -391,9 +712,10 @@ FormatDecision decide_format(const std::vector<FormatElevation>& elevations) {
         FormatRow r;
         r.elevation_deg = e.elevation_deg;
         r.unsaturated = int(e.unsaturated.size());
+        r.unsaturated_se = float(std::sqrt(std::max(0.0, e.unsaturated_var)));
         r.measurable = r.unsaturated >= k_min_unsaturated;
         r.saturated_share = e.silhouette > 0 ? float(double(e.saturated) / e.silhouette) : 0.0f;
-        r.saturated_share_se = float(se_share(r.saturated_share, size_t(e.silhouette)));
+        r.saturated_share_se = float(detail::se_share(r.saturated_share, size_t(e.silhouette)));
         d.rows.push_back(r);
         if (r.measurable) measurable.push_back(&e);
     }
@@ -416,26 +738,19 @@ FormatDecision decide_format(const std::vector<FormatElevation>& elevations) {
     };
     auto mae_se = [](const FormatElevation& e, auto&& model) {
         std::vector<double> err;
+        err.reserve(e.unsaturated.size());
         for (const auto& f : e.unsaturated) err.push_back(std::abs(model(f) - f.t_oracle));
-        return float(se_mean(err));
+        return float(detail::mae_se(err));
     };
     // Linearised least-squares SE of a one-parameter fit T(p) (definition at FormatRow::g_eff_se).
-    auto fit_se = [&](const std::vector<const FormatElevation*>& es, auto&& model, auto&& dmodel) {
-        double s = 0.0, j2 = 0.0;
-        size_t n = 0;
+    auto fit_se = [](const std::vector<const FormatElevation*>& es, auto&& model, auto&& dmodel) {
+        std::vector<double> res, der;
         for (const auto* e : es)
-            for (const auto& f : e->unsaturated) { const double r = model(f) - f.t_oracle; s += r * r; j2 += dmodel(f) * dmodel(f); ++n; }
-        return n > 1 && j2 > 0.0 ? float(std::sqrt(s / double(n - 1) / j2)) : 0.0f;
-    };
-    auto dt_scalar = [](const FormatFootprint& f, double g) {
-        double s = 0.0;
-        for (const auto& r : f.integrals) s -= r[0] * std::exp(-g * r[0]);
-        return s / double(f.integrals.size());
-    };
-    auto dt_axis = [](const FormatFootprint& f, double c) {
-        double s = 0.0;
-        for (const auto& r : f.integrals) s -= r[1] * std::exp(-c * r[1]);
-        return s / double(f.integrals.size());
+            for (const auto& f : e->unsaturated) {
+                res.push_back(model(f) - f.t_oracle);
+                der.push_back(dmodel(f));
+            }
+        return float(detail::fit_se(res, der));
     };
 
     d.g = float(golden_min([&](double g) { return sse(measurable, [&](const FormatFootprint& f) { return t_scalar(f, g); }); },
@@ -443,7 +758,7 @@ FormatDecision decide_format(const std::vector<FormatElevation>& elevations) {
     {
         const double g = d.g;
         d.g_se = fit_se(measurable, [&](const FormatFootprint& f) { return t_scalar(f, g); },
-                        [&](const FormatFootprint& f) { return dt_scalar(f, g); });
+                        [&](const FormatFootprint& f) { return detail::dt_scalar(f, g); });
     }
     float scalar_worst = 0.0f, axis_worst = 0.0f;
     bool scalar_within = true;
@@ -461,7 +776,7 @@ FormatDecision decide_format(const std::vector<FormatElevation>& elevations) {
                                    0.01, 2.0));
         const double ge = r.g_eff;
         r.g_eff_se = fit_se(one, [&](const FormatFootprint& f) { return t_scalar(f, ge); },
-                            [&](const FormatFootprint& f) { return dt_scalar(f, ge); });
+                            [&](const FormatFootprint& f) { return detail::dt_scalar(f, ge); });
         scalar_worst = std::max(scalar_worst, r.scalar_mae);
         axis_worst   = std::max(axis_worst, r.axis_mae);
         if (r.scalar_mae > r.axis_mae + k_format_scalar_slack) scalar_within = false;
@@ -475,7 +790,7 @@ FormatDecision decide_format(const std::vector<FormatElevation>& elevations) {
     {
         const double c = d.clumping;
         d.clumping_se = fit_se(measurable, [&](const FormatFootprint& f) { return t_axis(f, c); },
-                               [&](const FormatFootprint& f) { return dt_axis(f, c); });
+                               [&](const FormatFootprint& f) { return detail::dt_axis(f, c); });
     }
     float clumped_worst = 0.0f;
     for (const auto* e : measurable) {
@@ -533,6 +848,7 @@ void write_body(Json& j, const std::optional<RegionStats>& b) {
     if (!b) { j.null(); return; }
     j.obj();
     j.key("footprints").integer(b->footprints);
+    j.key("footprints_se").num(b->footprints_se);
     j.key("mean").num(b->mean);
     j.key("mean_se").num(b->mean_se);
     j.key("p50").num(b->p50);
@@ -544,13 +860,21 @@ void write_body(Json& j, const std::optional<RegionStats>& b) {
     j.end();
 }
 
+// Precompute body stats at the 4 min-edge thresholds once (reusing `cse_1m` for d == k_body_edge_m).
+std::array<std::optional<RegionStats>, 4> body_by_edge_stats(const FootprintSet& set, const CountSEs& cse_1m) {
+    constexpr float k_edges[4] = {0.5f, 1.0f, 1.5f, 2.0f};
+    std::array<std::optional<RegionStats>, 4> out;
+    for (size_t i = 0; i < 4; ++i)
+        out[i] = body_stats_impl(set, k_edges[i], k_edges[i] == k_body_edge_m ? &cse_1m : nullptr, true);
+    return out;
+}
+
 // {"<d>": mean} and its {"<d>": se} sibling.
-void write_body_by_edge(Json& j, const FootprintSet& set, bool se) {
+void write_body_by_edge(Json& j, const std::array<std::optional<RegionStats>, 4>& stats, bool se) {
+    constexpr const char* k_names[4] = {"0.5", "1.0", "1.5", "2.0"};
     j.obj();
-    for (const auto& [name, d] : std::vector<std::pair<const char*, float>>{{"0.5", 0.5f}, {"1.0", 1.0f}, {"1.5", 1.5f}, {"2.0", 2.0f}}) {
-        const auto b = body_stats(set, d);
-        j.key(name).opt(b ? std::optional<float>(se ? b->mean_se : b->mean) : std::nullopt);
-    }
+    for (size_t i = 0; i < 4; ++i)
+        j.key(k_names[i]).opt(stats[i] ? std::optional<float>(se ? stats[i]->mean_se : stats[i]->mean) : std::nullopt);
     j.end();
 }
 
@@ -566,7 +890,7 @@ void write_binned(Json& j, const std::vector<std::pair<float, float>>& value_t, 
         j.key(hi_key).num((k + 1) * bin);
         j.key("footprints").integer(static_cast<long long>(ts.size()));
         j.key("mean").num(sum / double(ts.size()));
-        j.key("mean_se").num(se_mean_t(ts, rays_per_side(RayStream::selection) * rays_per_side(RayStream::selection)));
+        j.key("mean_se").num(detail::se_mean_t(ts, rays_per_side(RayStream::selection) * rays_per_side(RayStream::selection)));
         j.end();
     }
     j.end();
@@ -598,10 +922,14 @@ std::string probe_report_json(const Probe& probe, const ProbeOptions& opt, const
         }
     }
     const bool leafy = m.leaf_triangles > 0;
-    const FootprintSet zenith = measure_footprints(probe, sun_direction(90.0f, 0.0f), PlaneKind::beam, Occluders::leaves_and_bark);
+    const FootprintSet zenith = measure_footprints(probe, sun_direction(90.0f, 0.0f), PlaneKind::beam,
+                                                   Occluders::leaves_and_bark, opt.selection_stream);
     int zenith_sil = 0;
     for (const Footprint& f : zenith.footprints) zenith_sil += f.silhouette() ? 1 : 0;
-    const double ground_area = zenith_sil * double(k_footprint_m) * k_footprint_m;
+    const double fp_area = double(k_footprint_m) * k_footprint_m;
+    const double ground_area = zenith_sil * fp_area;
+    const double zenith_sil_se = footprint_count_se(zenith).silhouette_se;
+    const double ground_area_se = zenith_sil_se * fp_area;
     std::map<int, int> cards_hist;
     for (const Site& s : m.sites) ++cards_hist[s.cards];
 
@@ -616,7 +944,9 @@ std::string probe_report_json(const Probe& probe, const ProbeOptions& opt, const
     j.key("card_area_m2").num(card_area);
     j.key("opaque_leaf_area_m2").num(opaque_area);
     j.key("crown_ground_projected_area_m2").num(ground_area);
+    j.key("crown_ground_projected_area_m2_se").num(ground_area_se);
     j.key("leaf_area_index");    if (ground_area > 0.0) j.num(opaque_area / ground_area); else j.null();
+    j.key("leaf_area_index_se"); if (ground_area > 0.0) j.num((opaque_area / (ground_area * ground_area)) * ground_area_se); else j.null();
     if (leafy) {
         const vec3 e = lhi - llo;
         j.key("leaf_aabb_min_m").vec(llo);
@@ -651,8 +981,8 @@ std::string probe_report_json(const Probe& probe, const ProbeOptions& opt, const
         j.key("directions").arr();
         for (size_t si = 0; si < suns.size(); ++si) {
             const SunDirection& s = suns[si];
-            const FootprintSet beam = measure_footprints(probe, s, PlaneKind::beam, Occluders::leaves_and_bark);
-            const FootprintSet ground = measure_footprints(probe, s, PlaneKind::ground, Occluders::leaves_and_bark);
+            const FootprintSet beam = measure_footprints(probe, s, PlaneKind::beam, Occluders::leaves_and_bark, opt.selection_stream);
+            const FootprintSet ground = measure_footprints(probe, s, PlaneKind::ground, Occluders::leaves_and_bark, opt.selection_stream);
             int sil = 0, rim = 0;
             std::vector<float> cg_s, co_s, cg_b, co_b;   // per-footprint mean crossings
             std::vector<std::pair<float, float>> by_edge, by_trunk;
@@ -672,25 +1002,29 @@ std::string probe_report_json(const Probe& probe, const ProbeOptions& opt, const
             auto crossings = [&](const std::vector<float>& g, const std::vector<float>& o) {
                 if (g.empty()) { j.null(); return; }
                 j.obj();
-                j.key("geometric").num(mean_of(g)); j.key("geometric_se").num(se_mean(g));
-                j.key("opaque").num(mean_of(o));    j.key("opaque_se").num(se_mean(o));
+                j.key("geometric").num(mean_of(g)); j.key("geometric_se").num(detail::se_mean(g));
+                j.key("opaque").num(mean_of(o));    j.key("opaque_se").num(detail::se_mean(o));
                 j.end();
             };
             if (s.elevation_deg >= 90.0f)
                 for (const Footprint& f : beam.footprints) by_trunk.push_back({std::hypot(f.centre.x, f.centre.y), f.t});
-            const auto body = body_stats(beam, k_body_edge_m);
-            opaque_by_direction.push_back({s.elevation_deg, crown::body_opaque(beam)});
+            const CountSEs beam_cse = footprint_count_se(beam, k_body_edge_m);
+            const auto beam_by_edge = body_by_edge_stats(beam, beam_cse);
+            const std::optional<RegionStats>& body = beam_by_edge[1];
+            opaque_by_direction.push_back({s.elevation_deg, body && body->share_opaque >= k_stop_body_share});
 
             j.obj();
             j.key("elevation_deg").num(s.elevation_deg);
             j.key("azimuth_deg").num(s.azimuth_deg);
             j.key("footprints").integer(static_cast<long long>(beam.footprints.size()));
             j.key("silhouette").integer(sil);
+            j.key("silhouette_se").num(beam_cse.silhouette_se);
             j.key("rim").integer(rim);
+            j.key("rim_se").num(beam_cse.rim_se);
             j.key("body"); write_body(j, body);
             j.key("body_opaque"); if (body) j.boolean(opaque_by_direction.back().second); else j.null();
-            j.key("body_mean_by_min_edge_m"); write_body_by_edge(j, beam, false);
-            j.key("body_mean_by_min_edge_m_se"); write_body_by_edge(j, beam, true);
+            j.key("body_mean_by_min_edge_m"); write_body_by_edge(j, beam_by_edge, false);
+            j.key("body_mean_by_min_edge_m_se"); write_body_by_edge(j, beam_by_edge, true);
             j.key("t_by_edge_distance"); write_binned(j, by_edge, k_edge_bin_m, "d_min_m", "d_max_m");
             j.key("crossings").obj();
             j.key("silhouette"); crossings(cg_s, co_s);
@@ -700,11 +1034,14 @@ std::string probe_report_json(const Probe& probe, const ProbeOptions& opt, const
             {
                 int gsil = 0;
                 for (const Footprint& f : ground.footprints) gsil += f.silhouette() ? 1 : 0;
+                const CountSEs ground_cse = footprint_count_se(ground, k_body_edge_m);
+                const auto ground_by_edge = body_by_edge_stats(ground, ground_cse);
                 j.key("footprints").integer(static_cast<long long>(ground.footprints.size()));
                 j.key("silhouette").integer(gsil);
-                j.key("body"); write_body(j, body_stats(ground, k_body_edge_m));
-                j.key("body_mean_by_min_edge_m"); write_body_by_edge(j, ground, false);
-                j.key("body_mean_by_min_edge_m_se"); write_body_by_edge(j, ground, true);
+                j.key("silhouette_se").num(ground_cse.silhouette_se);
+                j.key("body"); write_body(j, ground_by_edge[1]);
+                j.key("body_mean_by_min_edge_m"); write_body_by_edge(j, ground_by_edge, false);
+                j.key("body_mean_by_min_edge_m_se"); write_body_by_edge(j, ground_by_edge, true);
             }
             j.end();
             j.key("t_by_trunk_distance");
@@ -728,7 +1065,7 @@ std::string probe_report_json(const Probe& probe, const ProbeOptions& opt, const
                     j.key("depth_max_m").num((k + 1) * k_depth_bin_m);
                     j.key("sites").integer(b.first);
                     j.key("sunlit_share").num(double(b.second) / b.first);
-                    j.key("sunlit_share_se").num(se_share(double(b.second) / b.first, size_t(b.first)));
+                    j.key("sunlit_share_se").num(detail::se_share(double(b.second) / b.first, size_t(b.first)));
                     j.end();
                 }
                 j.end();
@@ -739,7 +1076,7 @@ std::string probe_report_json(const Probe& probe, const ProbeOptions& opt, const
                 auto it = std::find_if(fmt.begin(), fmt.end(), [&](const FormatElevation& e) { return e.elevation_deg == s.elevation_deg; });
                 if (it == fmt.end()) { fmt.push_back({}); it = fmt.end() - 1; }
                 // The format rule's own population (R-CR1): selected and scored with bark removed.
-                const FootprintSet leaves = measure_footprints(probe, s, PlaneKind::beam, Occluders::leaves_only);
+                const FootprintSet leaves = measure_footprints(probe, s, PlaneKind::beam, Occluders::leaves_only, opt.selection_stream);
                 add_format_footprints(probe, leaves, *volume, *it);
             }
         }
@@ -774,6 +1111,7 @@ std::string probe_report_json(const Probe& probe, const ProbeOptions& opt, const
                 j.obj();
                 j.key("elevation_deg").num(r.elevation_deg);
                 j.key("unsaturated_footprints").integer(r.unsaturated);
+                j.key("unsaturated_footprints_se").num(r.unsaturated_se);
                 j.key("measurable").boolean(r.measurable);
                 j.key("saturated_share").num(r.saturated_share);
                 j.key("saturated_share_se").num(r.saturated_share_se);
@@ -816,13 +1154,13 @@ std::string probe_report_json(const Probe& probe, const ProbeOptions& opt, const
             j.obj();
             j.key("directions").integer(k_open_sky_directions);
             j.key("mean").num(sum / double(share.size()));
-            j.key("mean_se").num(se_mean(share));
+            j.key("mean_se").num(detail::se_mean(share));
             j.key("p10").num(percentile(share, 0.10));
-            j.key("p10_se").num(se_quantile(share, 0.10));
+            j.key("p10_se").num(detail::se_quantile(share, 0.10));
             j.key("p50").num(percentile(share, 0.50));
-            j.key("p50_se").num(se_quantile(share, 0.50));
+            j.key("p50_se").num(detail::se_quantile(share, 0.50));
             j.key("p90").num(percentile(share, 0.90));
-            j.key("p90_se").num(se_quantile(share, 0.90));
+            j.key("p90_se").num(detail::se_quantile(share, 0.90));
             j.end();
         } else j.null();
 
@@ -836,12 +1174,12 @@ std::string probe_report_json(const Probe& probe, const ProbeOptions& opt, const
             for (uint8_t x : light[si].lit) lit += x;
             const double share = m.sites.empty() ? 0.0 : double(lit) / double(m.sites.size());
             j.key("share");    if (!m.sites.empty()) j.num(share); else j.null();
-            j.key("share_se"); if (!m.sites.empty()) j.num(se_share(share, m.sites.size())); else j.null();
+            j.key("share_se"); if (!m.sites.empty()) j.num(detail::se_share(share, m.sites.size())); else j.null();
             for (const auto& [name, k] : std::vector<std::pair<const char*, int>>{{"quartiles", 4}, {"deciles", 10}}) {
                 const auto groups = lit_share_by_rank(probe, light[si], s.dir, k);
                 j.key(name).arr(); for (const auto& g : groups) j.opt(g.share); j.end();
                 j.key((std::string(name) + "_se").c_str()).arr();
-                for (const auto& g : groups) j.opt(g.share ? std::optional<float>(float(se_share(*g.share, size_t(g.sites)))) : std::nullopt);
+                for (const auto& g : groups) j.opt(g.share ? std::optional<float>(float(detail::se_share(*g.share, size_t(g.sites)))) : std::nullopt);
                 j.end();
             }
             j.key("eyes").arr();
@@ -856,7 +1194,7 @@ std::string probe_report_json(const Probe& probe, const ProbeOptions& opt, const
                 j.key("eye_m").vec(eye);
                 j.key("visible_sites").integer(nv);
                 j.key("share");    if (nv) j.num(double(nl) / nv); else j.null();
-                j.key("share_se"); if (nv) j.num(se_share(double(nl) / nv, size_t(nv))); else j.null();
+                j.key("share_se"); if (nv) j.num(detail::se_share(double(nl) / nv, size_t(nv))); else j.null();
                 j.end();
             }
             j.end();
@@ -871,10 +1209,10 @@ std::string probe_report_json(const Probe& probe, const ProbeOptions& opt, const
 }
 
 std::string probe_glb_report(std::span<const uint8_t> glb, int lod, const ProbeOptions& options,
-                             const std::string& input_json) {
+                             const ProbeInput& input) {
     LoadedCrown loaded = load_crown_from_glb(glb, lod);
     const Probe probe(std::move(loaded.mesh));
-    return probe_report_json(probe, options, input_json);
+    return probe_report_json(probe, options, format_probe_input(input, glb, lod));
 }
 
 }  // namespace treegen::crown

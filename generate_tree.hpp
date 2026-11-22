@@ -21,6 +21,7 @@
 namespace treegen {
 
 struct GrownTree {
+    uint64_t     scenario_fnv   = 0;  // Scenario::scenario_fnv that grew this skeleton (D4)
     uint64_t     seed_effective = 0;  // cli_seed ^ fnv1a64(scenario.name)
     TreeSkeleton skeleton;            // leaf_sites filled
     TrunkCapsule capsule;

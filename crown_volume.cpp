@@ -14,6 +14,11 @@ constexpr int k_channels = 4;  // rho, rho_x, rho_y, rho_z
 
 float comp(vec3 v, int a) { return a == 0 ? v.x : (a == 1 ? v.y : v.z); }
 
+// Single projected-density sum shared by integrals() and optical_depth() (D1).
+inline double projected_density(const float* c, double ax, double ay, double az) {
+    return ax * c[1] + ay * c[2] + az * c[3];
+}
+
 }  // namespace
 
 CrownVolume CrownVolume::build(const Probe& probe, int cells_longest) {
@@ -167,7 +172,7 @@ std::array<float, 2> CrownVolume::integrals(vec3 p, vec3 dir) const {
     march(m_grid, p, dir, [&](size_t cell, double len) {
         const float* c = &m_grid.c[cell * k_channels];
         rho  += c[0] * len;
-        proj += (ax * c[1] + ay * c[2] + az * c[3]) * len;
+        proj += projected_density(c, ax, ay, az) * len;
     });
     return {static_cast<float>(rho), static_cast<float>(proj)};
 }
@@ -230,7 +235,7 @@ float CrownVolume::optical_depth(vec3 p, vec3 dir, float lowpass_sigma_m, const 
     double tau = 0.0;
     march(g, p, dir, [&](size_t cell, double len) {
         const float* c = &g.c[cell * k_channels];
-        tau += (model.kind == ExtinctionKind::scalar ? model.g * c[0] : ax * c[1] + ay * c[2] + az * c[3]) * len;
+        tau += (model.kind == ExtinctionKind::scalar ? model.g * c[0] : projected_density(c, ax, ay, az)) * len;
     });
     return static_cast<float>(tau * model.clumping);
 }

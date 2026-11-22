@@ -100,11 +100,23 @@ LoadedCrown load_crown_from_glb(std::span<const uint8_t> glb, int lod);
 enum class Occluders { leaves_and_bark, leaves_only };
 const char* occluders_name(Occluders o);
 
+// Single population membership predicate (D5): leaves always block; bark blocks
+// only in leaves_and_bark. Used by LineHits::occluded and every Probe query.
+inline bool blocks_category(bool is_leaf, Occluders o) {
+    return is_leaf || o == Occluders::leaves_and_bark;
+}
+inline bool blocks(const Triangle& t, Occluders o) {
+    return blocks_category(t.site >= 0, o);
+}
+
 struct LineHits {
     int  leaf_geometric = 0;   // leaf triangles the ray intersects, alpha ignored
     int  leaf_opaque    = 0;   // ... that pass the alpha test there
     int  bark           = 0;
-    bool occluded(Occluders o) const { return leaf_opaque > 0 || (o == Occluders::leaves_and_bark && bark > 0); }
+    bool occluded(Occluders o) const {
+        return (leaf_opaque > 0 && blocks_category(true, o)) ||
+               (bark > 0 && blocks_category(false, o));
+    }
 };
 
 class Probe {

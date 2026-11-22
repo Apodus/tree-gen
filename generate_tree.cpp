@@ -31,6 +31,7 @@ GrownTree grow_tree(const Scenario& s, uint64_t cli_seed) {
         throw std::runtime_error("generate_tree: scenario '" + s.name + "' is kind '" + s.kind + "', not tree");
 
     GrownTree g;
+    g.scenario_fnv = s.scenario_fnv;
     g.seed_effective = cli_seed ^ s.scenario_fnv;
     const uint64_t seed_effective = g.seed_effective;
 
@@ -48,6 +49,8 @@ GrownTree grow_tree(const Scenario& s, uint64_t cli_seed) {
 }
 
 TreeLevels emit_levels(const Scenario& s, GrownTree grown) {
+    if (grown.scenario_fnv != s.scenario_fnv)
+        throw std::logic_error("emit_levels: GrownTree was grown from a different scenario (scenario_fnv mismatch)");
     TreeLevels g{std::move(grown)};
     const uint64_t seed_effective = g.seed_effective;
     const TreeSkeleton& skel = g.skeleton;

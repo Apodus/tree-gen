@@ -379,9 +379,10 @@ int main(int argc, char** argv) {
                 return 1;
             }
             const std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-            const std::string input = treegen::crown::probe_input_glb(glb_path, bytes, probe_lod_index);
-            return write_probe_report(treegen::crown::probe_glb_report(bytes, probe_lod_index, probe_options, input),
-                                      probe_path);
+            return write_probe_report(
+                treegen::crown::probe_glb_report(bytes, probe_lod_index, probe_options,
+                                                 treegen::crown::ProbeInput::glb(glb_path)),
+                probe_path);
         }
 
         // The levels are built only when a GLB is written.
@@ -506,9 +507,10 @@ int main(int argc, char** argv) {
             // The probe reads the GLB bytes generate_tree returned (what --out
             // writes), through the same loader as --glb.
             if (!probe_path.empty()) {
-                const std::string input = treegen::crown::probe_input_scenario(scenario_path, cli_seed, gen.glb, probe_lod_index);
                 const int rc = write_probe_report(
-                    treegen::crown::probe_glb_report(gen.glb, probe_lod_index, probe_options, input), probe_path);
+                    treegen::crown::probe_glb_report(gen.glb, probe_lod_index, probe_options,
+                                                     treegen::crown::ProbeInput::scenario(scenario_path, cli_seed)),
+                    probe_path);
                 if (rc != 0) return rc;
             }
 

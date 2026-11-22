@@ -22,6 +22,7 @@
 #include <cstdint>
 #include <functional>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -30,6 +31,7 @@ namespace treegen::crown {
 inline constexpr int   k_report_schema       = 1;
 inline constexpr float k_footprint_m         = 0.5f;
 inline constexpr int   k_rays_per_side       = 8;      // 64 rays per footprint
+static_assert(k_rays_per_side * k_rays_per_side <= 64, "Footprint::open_mask stores up to 64 selection rays");
 inline constexpr float k_silhouette_t        = 0.98f;
 inline constexpr float k_body_edge_m         = 1.0f;
 inline constexpr float k_opaque_t            = 0.05f;  // stop rule and format-rule floor
@@ -46,8 +48,10 @@ inline constexpr int   k_format_cells        = 32;     // the review's grid; S-P
 inline constexpr int   k_format_rays_per_side = 32;
 // Jitter streams: the format rule scores footprints on rays independent of the
 // 64 that selected them, so selecting on a noisy T cannot bias its MAE.
-inline constexpr uint64_t k_footprint_ray_stream = 0xC20A5EEDull;
-inline constexpr uint64_t k_format_ray_stream    = 0xF0E3A7EDull;
+// selection_alt is a test-only 8 x 8 stream for re-jitter stability checks (P4).
+inline constexpr uint64_t k_footprint_ray_stream     = 0xC20A5EEDull;
+inline constexpr uint64_t k_footprint_alt_ray_stream = 0xA175EED1ull;
+inline constexpr uint64_t k_format_ray_stream        = 0xF0E3A7EDull;
 inline constexpr int   k_open_sky_directions = 64;
 
 struct SunDirection {
@@ -61,33 +65,36 @@ std::vector<SunDirection> sun_directions(const std::vector<float>& elevations_de
 enum class PlaneKind { beam, ground };
 
 struct Footprint {
-    int   i = 0, j = 0;
-    float u = 0.0f, v = 0.0f;   // centre, plane coordinates (metres)
-    vec3  centre;               // world
-    float t = 1.0f;             // unoccluded share of its rays
-    float edge_distance = 0.0f; // 0 outside the silhouette
-    float crossings_geometric = 0.0f;  // mean over its rays
-    float crossings_opaque    = 0.0f;
-    bool  silhouette() const { return t < k_silhouette_t; }
-    bool  body() const { return in_body(k_body_edge_m); }
+    int      i = 0, j = 0;
+    float    u = 0.0f, v = 0.0f;   // centre, plane coordinates (metres)
+    vec3     centre;               // world
+    float    t = 1.0f;             // unoccluded share of its rays
+    float    edge_distance = 0.0f; // 0 outside the silhouette
+    float    crossings_geometric = 0.0f;  // mean over its rays
+    float    crossings_opaque    = 0.0f;
+    uint64_t open_mask = 0;        // bit r = 1 iff selection ray r was unoccluded (P2)
+    uint8_t  ray_count = 0;        // selection rays traced (64 from measure_footprints; 0 if synthetic)
+    bool     silhouette() const { return t < k_silhouette_t; }
+    bool     body() const { return in_body(k_body_edge_m); }
     // The one body predicate: silhouette footprints at least min_edge_m from an
     // outside centre. Edge distances are centre to centre on the footprint
     // lattice, d = pitch * sqrt(n) for n a sum of two squares (0.5, 0.707, 1.0,
     // 1.118, 1.414, ... m at a 0.5 m pitch): a threshold is only meaningful at
     // those distances, and every threshold in (0.707, 1.0] is the same rule.
-    bool  in_body(float min_edge_m) const { return silhouette() && edge_distance >= min_edge_m; }
+    bool     in_body(float min_edge_m) const { return silhouette() && edge_distance >= min_edge_m; }
 };
 // The pitch the rim/body split assumes (k_body_edge_m = 2 pitches: the 0.707 m
 // ring is rim, the 1.0 m ring body) and the exact-lattice plate gate derives its
 // integers from. A new pitch moves which ring is body: re-derive both.
 static_assert(k_footprint_m == 0.5f, "footprint pitch changed: re-derive the body threshold against the lattice distances");
 
-// The footprint sampler's two jitter streams (one definition site: rays per
+// The footprint sampler's jitter streams (one definition site: rays per
 // side and stream id both follow from the purpose; there is no default).
 // - selection: the 8 x 8 rays that measure a footprint's T;
+// - selection_alt: test-only 8 x 8 stream with independent jitter (P4);
 // - format: the 32 x 32 rays, independent of selection's, that re-measure the
 //   format rule's unsaturated footprints, so selecting on a noisy T cannot bias its MAE.
-enum class RayStream { selection, format };
+enum class RayStream { selection, selection_alt, format };
 int      rays_per_side(RayStream s);
 uint64_t stream_id(RayStream s);
 
@@ -95,9 +102,11 @@ struct FootprintSet {
     SunDirection           sun;
     PlaneKind              kind = PlaneKind::beam;
     Occluders              occluders = Occluders::leaves_and_bark;   // set by measure_footprints
+    RayStream              selection_stream = RayStream::selection;  // set by measure_footprints
     vec3                   origin, e1, e2;   // plane frame
     float                  ray_back = 0.0f;  // rays start this far behind the plane
     float                  t_max = 0.0f;     // ... and end this far along the sun direction
+    int                    i0 = 0, i1 = 0, j0 = 0, j1 = 0;  // lattice index bounds [i0,i1) x [j0,j1)
     std::vector<Footprint> footprints;
     // The rays_per_side(s)^2 jittered-stratified ray origins of footprint k
     // (deterministic in s; direction = sun.dir).
@@ -106,26 +115,60 @@ struct FootprintSet {
 
 // Measures every footprint of the plane's grid (the crown's projection plus one
 // footprint of margin) against population `occ` and assigns edge distances.
-FootprintSet measure_footprints(const Probe& probe, const SunDirection& sun, PlaneKind kind, Occluders occ);
+// `selection_stream` defaults to RayStream::selection; pass RayStream::selection_alt
+// in re-jitter tests (P4). RayStream::format throws std::logic_error.
+FootprintSet measure_footprints(const Probe& probe, const SunDirection& sun, PlaneKind kind, Occluders occ,
+                                RayStream selection_stream = RayStream::selection);
 
-// Standard errors (R-CR6; one definition site, crown_oracle.cpp "SE"). Every
-// sampled statistic of the report carries `<name>_se` beside it:
+// Standard errors (R-CR6 / P2; one definition site, crown_oracle.cpp "SE").
+// Every sampled statistic of the report carries `<name>_se` beside it:
 // - a mean of footprint T: ray sampling, sqrt(sum T (1 - T) / R) / n over its n
 //   footprints of R rays (the geometry fixed, the jitter re-drawn);
 // - a share or a quantile over footprints or sites: the population's, binomial
 //   sqrt(p (1 - p) / n), and for a quantile the half-width of the order
-//   statistics one binomial SE either side of its rank;
+//   statistics one binomial SE either side of its rank (full one-sided spread
+//   when one rank clamps at 0 or n);
 // - a mean over footprints or sites of anything else (crossings, open sky,
 //   |error| for an MAE): std / sqrt(n), footprints treated as independent.
-// Counts, areas, coverage and the site histogram are exact functions of the
-// bytes and carry none.
+// Exact functions of the GLB bytes (carry no `_se`):
+//   bark_triangles, leaf_triangles, sites, cards_per_site, alpha_coverage,
+//   card_area_m2, opaque_leaf_area_m2, leaf_aabb_min_m, leaf_aabb_max_m,
+//   leaf_area_density_m2_per_m3, trunk_base_z_m, lowest_leaf_height_m.
+// Jitter-dependent counts and derived areas (depend on the 64-ray selection
+// stream jitter; carry `_se` via exact binomial crossing probabilities for
+// independent counts and ray-hit bootstrap with edge_distance recomputation
+// for spatially coupled counts):
+//   crown_ground_projected_area_m2, leaf_area_index, silhouette, rim,
+//   body.footprints, ground_plane.silhouette, ground_plane.body.footprints,
+//   format.rows[].unsaturated_footprints.
+struct CountSEs {
+    double silhouette_se        = 0.0;
+    double rim_se               = 0.0;
+    double body_footprints_se   = 0.0;
+    double body_mean_se         = 0.0;
+    double body_p50_se          = 0.0;
+    double body_p95_se          = 0.0;
+    double body_share_opaque_se = 0.0;
+};
+CountSEs footprint_count_se(const FootprintSet& set, float min_edge_m = k_body_edge_m);
+
 struct RegionStats {
     int   footprints = 0;
+    float footprints_se = 0.0f;
     float mean = 0.0f, p50 = 0.0f, p95 = 0.0f, share_opaque = 0.0f;
     float mean_se = 0.0f, p50_se = 0.0f, p95_se = 0.0f, share_opaque_se = 0.0f;
 };
 // Body statistics over the footprints Footprint::in_body(min_edge_m) admits (nullopt: none).
 std::optional<RegionStats> body_stats(const FootprintSet& set, float min_edge_m);
+
+// Pin bands (P1; one definition site in crown_oracle.cpp):
+// max(3 * se, resolution_floor), so zero-SE degenerate statistics never collapse
+// to a zero-width band. Pin tests call these wrappers instead of literal bands.
+double pin_band(double se, double resolution_floor);
+double pin_band_share(double se, size_t n);
+double pin_band_mean_t(double se, size_t footprints, int rays_per_footprint);
+double pin_band_quantile(double se, int step_count);
+double pin_band_count(double se);
 
 // --- Stop rule (plan S-P0a) ---------------------------------------------------
 // One direction: the body is opaque when the share of its footprints with
@@ -149,14 +192,16 @@ struct FormatFootprint {
     std::vector<std::array<float, 2>> integrals;   // per ray: {integral rho, integral dot(|w|, rho_xyz)}
 };
 struct FormatElevation {
-    float elevation_deg = 0.0f;
-    int   silhouette = 0;                          // for the saturated share
-    int   saturated  = 0;                          // silhouette footprints with T < 0.05
+    float  elevation_deg = 0.0f;
+    int    silhouette = 0;                         // for the saturated share
+    int    saturated  = 0;                         // silhouette footprints with T < 0.05
+    double unsaturated_var = 0.0;                  // binomial crossing variance of unsaturated count (P2)
     std::vector<FormatFootprint> unsaturated;      // T in [0.05, 0.95]
 };
 struct FormatRow {
     float elevation_deg = 0.0f;
     int   unsaturated = 0;
+    float unsaturated_se = 0.0f;
     bool  measurable = false;
     float scalar_mae = 0.0f, axis_mae = 0.0f, g_eff = 0.0f, saturated_share = 0.0f;
     float scalar_mae_se = 0.0f, axis_mae_se = 0.0f, saturated_share_se = 0.0f;
@@ -178,6 +223,20 @@ FormatDecision decide_format(const std::vector<FormatElevation>& elevations);
 void add_format_footprints(const Probe& probe, const FootprintSet& set, const CrownVolume& volume, FormatElevation& into,
                            const std::function<bool(const Footprint&)>& keep = {});
 
+// --- Exposed SE primitives for direct construction tests (P3) ------------------
+
+namespace detail {
+double se_mean(std::span<const double> x);
+double se_mean(std::span<const float> x);
+double se_mean_t(std::span<const float> t, int rays);
+double se_share(double p, size_t n);
+double se_quantile(std::vector<float> v, double q);
+double mae_se(std::span<const double> abs_errors);
+double fit_se(std::span<const double> residuals, std::span<const double> derivatives);
+double dt_scalar(const FormatFootprint& f, double g);
+double dt_axis(const FormatFootprint& f, double c);
+}  // namespace detail
+
 // --- The report ----------------------------------------------------------------
 
 struct ProbeOptions {
@@ -186,25 +245,42 @@ struct ProbeOptions {
     std::vector<float> elevations_deg = {10, 20, 30, 45, 60, 70, 75, 90};
     int                azimuths = 4;
     std::vector<vec3>  eyes;   // object space
+    RayStream          selection_stream = RayStream::selection;   // test-only re-jitter hook (P4)
 };
 
 // `s` as a quoted, escaped JSON string.
 std::string json_string(const std::string& s);
 
-// The report's "input" object: the loader's arguments, one spelling per input,
-// and the probed GLB bytes' digest (fnv1a64, det_rng.hpp), so a report names the
-// bytes it measured whichever path produced them.
-std::string glb_digest(std::span<const uint8_t> glb);   // "0x%016x"
-std::string probe_input_scenario(const std::string& scenario_path, uint64_t seed, std::span<const uint8_t> glb, int lod);
-std::string probe_input_glb(const std::string& glb_path, std::span<const uint8_t> glb, int lod);
+// The probed GLB bytes' digest (fnv1a64, det_rng.hpp), "0x%016x".
+std::string glb_digest(std::span<const uint8_t> glb);
+
+// Typed provenance for probe_glb_report (D4): callers pass only source metadata;
+// probe_glb_report computes glb_fnv1a64 and probe_lod from the actual GLB bytes
+// and LOD it probes, so caller/payload mismatch is impossible by API.
+enum class ProbeInputKind { scenario, glb };
+
+struct ProbeInput {
+    ProbeInputKind kind = ProbeInputKind::glb;
+    std::string    path;
+    uint64_t       seed = 0;
+
+    static ProbeInput scenario(std::string scenario_path, uint64_t cli_seed) {
+        return {ProbeInputKind::scenario, std::move(scenario_path), cli_seed};
+    }
+    static ProbeInput glb(std::string glb_path) {
+        return {ProbeInputKind::glb, std::move(glb_path), 0};
+    }
+};
 
 // The versioned JSON document: {"schema", "input", "tree", "modes": {...}}.
-// `input_json` is the loader's echo, already a JSON object.
+// `input_json` is the loader's echo, already a JSON object (used directly by
+// synthetic Probe unit tests that have no GLB bytes).
 std::string probe_report_json(const Probe& probe, const ProbeOptions& options, const std::string& input_json);
 
 // The front end's whole path for one input: GLB bytes (from generate_tree or a
-// file) -> load_crown_from_glb(lod) -> Probe -> report. Both inputs call this.
+// file) -> load_crown_from_glb(lod) -> Probe -> report. Computes glb_fnv1a64
+// and probe_lod internally from `glb` and `lod`. Both inputs call this.
 std::string probe_glb_report(std::span<const uint8_t> glb, int lod, const ProbeOptions& options,
-                             const std::string& input_json);
+                             const ProbeInput& input);
 
 }  // namespace treegen::crown

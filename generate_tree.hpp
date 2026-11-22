@@ -12,6 +12,7 @@
 #include "skeleton.hpp"
 
 #include <cstdint>
+#include <type_traits>
 #include <vector>
 
 namespace treegen {
@@ -25,8 +26,18 @@ struct GenerateOptions {
     bool glb = true;
 };
 // K17: every field changes what default options produce, which the extraction
-// table ([treegen_generate_tree]) pins; a new field is a deliberate act that
-// re-records that table. Update this size with it.
+// table ([treegen_generate_tree]) pins; a field added, removed or retyped is a
+// deliberate act that re-records that table and updates these checks. The
+// binding fails to compile on any field count but two, whatever the size; the
+// decltypes catch a same-size type swap; the return pins both defaults. Still
+// open: a field whose meaning changes under the same name, type and default.
+consteval bool generate_options_fields_are_pinned() {
+    const auto [levels, glb] = GenerateOptions{};
+    static_assert(std::is_same_v<decltype(levels), const bool>, "GenerateOptions::levels retyped: re-record the extraction table");
+    static_assert(std::is_same_v<decltype(glb), const bool>, "GenerateOptions::glb retyped: re-record the extraction table");
+    return levels && glb;
+}
+static_assert(generate_options_fields_are_pinned(), "GenerateOptions changed: re-record the extraction table");
 static_assert(sizeof(GenerateOptions) == 2, "GenerateOptions changed: re-record the extraction table");
 
 struct GeneratedTree {

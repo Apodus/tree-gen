@@ -373,6 +373,43 @@ TEST_CASE("[crown_oracle] format rule: the oracle's sampling noise sits well und
     CHECK(cr::k_format_ray_stream != cr::k_footprint_ray_stream);
 }
 
+TEST_CASE("[crown_oracle] format rule: the re-measure traces the format stream, not the selection's", "[treegen][crown_oracle]") {
+    // Random-orientation slab, L = 1 in 6 x 6 x 1 m, sun at 60 degrees. Every
+    // footprint the rule keeps is re-traced here on both streams: its t_oracle
+    // must be the format stream's open share exactly, and the fixture must tell
+    // the streams apart (positive control), so a call site that passes the
+    // selection stream is red.
+    const cr::Probe probe(card_slab(5, 2304, 0.125f, 6.0f, 1.0f, false));
+    const cr::CrownVolume volume = cr::CrownVolume::build(probe, cr::k_format_cells);
+    const cr::FootprintSet set = cr::measure_footprints(probe, cr::sun_direction(60.0f, 0.0f), cr::PlaneKind::beam);
+    cr::FormatElevation fe;
+    cr::add_format_footprints(probe, set, volume, fe);
+
+    auto open_share = [&](size_t k, uint64_t stream) {
+        std::vector<vec3> rays;
+        set.rays(k, rays, cr::k_format_rays_per_side, stream);
+        int open = 0;
+        for (const vec3& o : rays) open += probe.occluded(o, set.sun.dir, -1) ? 0 : 1;
+        return float(open) / float(rays.size());
+    };
+    size_t c = 0;
+    int differ = 0;
+    for (size_t k = 0; k < set.footprints.size(); ++k) {
+        const float t = set.footprints[k].t;
+        if (t < cr::k_opaque_t || t > cr::k_unsaturated_hi) continue;   // the rule's selection
+        REQUIRE(c < fe.unsaturated.size());
+        const float own = open_share(k, cr::k_format_ray_stream);
+        INFO("footprint " << k << " (" << c << "): t_oracle " << fe.unsaturated[c].t_oracle << ", format stream " << own);
+        CHECK(fe.unsaturated[c].t_oracle == own);
+        differ += own != open_share(k, cr::k_footprint_ray_stream) ? 1 : 0;
+        ++c;
+    }
+    INFO("kept " << c << ", streams disagree on " << differ);
+    CHECK(c == fe.unsaturated.size());
+    CHECK(c >= size_t(cr::k_min_unsaturated));
+    CHECK(differ * 2 >= int(c));
+}
+
 // ---- Region logic ---------------------------------------------------------------------
 
 namespace {

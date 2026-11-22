@@ -127,9 +127,13 @@ FootprintSet measure_footprints(const Probe& probe, const SunDirection& sun, Pla
 // - a share or a quantile over footprints or sites: the population's, binomial
 //   sqrt(p (1 - p) / n), and for a quantile the half-width of the order
 //   statistics one binomial SE either side of its rank (full one-sided spread
-//   when one rank clamps at 0 or n);
+//   when one rank clamps at 0 or n or equals the quantile's own rank);
 // - a mean over footprints or sites of anything else (crossings, open sky,
-//   |error| for an MAE): std / sqrt(n), footprints treated as independent.
+//   |error| for an MAE): std / sqrt(n), footprints treated as independent;
+// - RegionStats::{mean_se, p50_se, p95_se, share_opaque_se}: when FootprintSet
+//   carries lattice bounds (measured grids), body_stats takes max(analytic,
+//   spatial_bootstrap) so boundary-flip membership cascades are included; on
+//   gridless synthetic sets, the exact analytic formulas are returned.
 // Exact functions of the GLB bytes (carry no `_se`):
 //   bark_triangles, leaf_triangles, sites, cards_per_site, alpha_coverage,
 //   card_area_m2, opaque_leaf_area_m2, leaf_aabb_min_m, leaf_aabb_max_m,
@@ -150,7 +154,8 @@ struct CountSEs {
     double body_p95_se          = 0.0;
     double body_share_opaque_se = 0.0;
 };
-CountSEs footprint_count_se(const FootprintSet& set, float min_edge_m = k_body_edge_m);
+CountSEs footprint_count_se(const FootprintSet& set, float min_edge_m = k_body_edge_m,
+                            bool include_spatial_bootstrap = true);
 
 struct RegionStats {
     int   footprints = 0;

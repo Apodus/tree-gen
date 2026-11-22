@@ -134,7 +134,8 @@ std::pair<int, int> unsaturated_open_range(int R) {
 double footprint_open_prob(const Footprint& f, int& out_rays) {
     if (f.ray_count > 0) {
         out_rays = int(f.ray_count);
-        return double(std::popcount(f.open_mask)) / double(out_rays);
+        const int open = std::min(int(std::popcount(f.open_mask)), out_rays);
+        return double(open) / double(out_rays);
     }
     out_rays = rays_per_side(RayStream::selection) * rays_per_side(RayStream::selection);
     return std::clamp(double(f.t), 0.0, 1.0);
@@ -196,17 +197,22 @@ double se_mean(std::span<const float> x)  { return std::sqrt(sample_variance_ove
 
 // Quantile q of n values: half the spread of the order statistics one binomial
 // SE (sqrt(n q (1 - q)) ranks) either side of its rank. When one side clamps at
-// the sample boundary (q*n - d <= 0 or q*n + d > n), use the full one-sided
-// spread instead of halving it (P1).
+// the sample boundary (q*n - d <= 0 or q*n + d > n) or equals the quantile's
+// own rank (exact discrete handoff such as n=19, q=0.95), use the full
+// one-sided spread instead of halving it (P1).
 double se_quantile(std::vector<float> v, double q) {
     if (v.size() < 2) return 0.0;
+    q = std::clamp(q, 0.0, 1.0);
     std::sort(v.begin(), v.end());
     const double n = double(v.size()), d = std::sqrt(n * q * (1.0 - q));
     const double lo_pos = q * n - d;
     const double hi_pos = q * n + d;
-    const bool one_sided = (lo_pos <= 0.0) || (hi_pos > n);
-    auto at = [&](double rank) { return double(v[size_t(std::clamp(rank, 0.0, n - 1.0))]); };
-    const double spread = at(std::ceil(hi_pos) - 1.0) - at(std::ceil(lo_pos) - 1.0);
+    auto rank_idx = [&](double rank) { return size_t(std::clamp(rank, 0.0, n - 1.0)); };
+    const size_t k_q  = rank_idx(std::ceil(q * n) - 1.0);
+    const size_t k_lo = rank_idx(std::ceil(lo_pos) - 1.0);
+    const size_t k_hi = rank_idx(std::ceil(hi_pos) - 1.0);
+    const bool one_sided = (lo_pos <= 0.0) || (hi_pos > n) || (k_lo == k_q) || (k_hi == k_q);
+    const double spread = double(v[k_hi]) - double(v[k_lo]);
     return one_sided ? spread : 0.5 * spread;
 }
 
@@ -228,12 +234,14 @@ double fit_se(std::span<const double> residuals, std::span<const double> derivat
 }
 
 double dt_scalar(const FormatFootprint& f, double g) {
+    if (f.integrals.empty()) return 0.0;
     double s = 0.0;
     for (const auto& r : f.integrals) s -= r[0] * std::exp(-g * r[0]);
     return s / double(f.integrals.size());
 }
 
 double dt_axis(const FormatFootprint& f, double c) {
+    if (f.integrals.empty()) return 0.0;
     double s = 0.0;
     for (const auto& r : f.integrals) s -= r[1] * std::exp(-c * r[1]);
     return s / double(f.integrals.size());
@@ -440,7 +448,7 @@ FootprintSet measure_footprints(const Probe& probe, const SunDirection& sun, Pla
     return set;
 }
 
-CountSEs footprint_count_se(const FootprintSet& set, float min_edge_m) {
+CountSEs footprint_count_se(const FootprintSet& set, float min_edge_m, bool include_spatial_bootstrap) {
     CountSEs out;
     const size_t n = set.footprints.size();
     if (n == 0) return out;
@@ -453,7 +461,6 @@ CountSEs footprint_count_se(const FootprintSet& set, float min_edge_m) {
     // treated as zero-variance empty sky.
     std::vector<double> p_open(n, 1.0);
     std::vector<int>    r_cnt(n, 0);
-    std::vector<double> q_sil(n, 0.0);
     std::vector<size_t> uncertain;
     double sil_var = 0.0;
     for (size_t k = 0; k < n; ++k) {
@@ -464,20 +471,21 @@ CountSEs footprint_count_se(const FootprintSet& set, float min_edge_m) {
         p_open[k] = p;
         r_cnt[k] = R;
         const double q = binom_prob_range(R, p, 0, max_silhouette_open(R));
-        q_sil[k] = q;
         if (p > 0.0 && p < 1.0) {
             sil_var += q * (1.0 - q);
             uncertain.push_back(k);
         }
     }
     out.silhouette_se = std::sqrt(sil_var);
-    if (uncertain.empty()) return out;
+    if (!include_spatial_bootstrap || uncertain.empty()) return out;
 
     // Spatially coupled counts and body stats (body.footprints, rim, body.mean,
     // p50, p95, share_opaque): bootstrap over the 64 stored ray hits with exact
     // edge_distance >= min_edge_m recomputation. Resampling open_boot ~ Binomial(R, p_k)
-    // per uncertain footprint has the exact joint distribution of a 64-ray
-    // nonparametric bootstrap and captures both ray jitter and membership cascades.
+    // per uncertain footprint has the exact joint distribution of an i.i.d. 64-ray
+    // nonparametric bootstrap (a conservative upper bound on 8x8 stratified
+    // Poisson-binomial variance by Hoeffding's theorem) and captures both ray
+    // jitter and membership cascades.
     const int w = set.i1 - set.i0, h = set.j1 - set.j0;
     if (w <= 0 || h <= 0 || size_t(w) * size_t(h) != n) return out;
 
@@ -490,14 +498,14 @@ CountSEs footprint_count_se(const FootprintSet& set, float min_edge_m) {
                 offsets.push_back({di, dj});
         }
 
-    // Build exact Binomial(R, p_k) CDFs for each distinct (R, p_k) among uncertain footprints.
-    std::map<std::pair<int, int>, std::vector<double>> cdf_cache;
+    // Build exact Binomial(R, p_k) CDFs keyed on exact (R, p_k) so arbitrary
+    // synthetic probabilities never alias.
+    std::map<std::pair<int, double>, std::vector<double>> cdf_cache;
     std::vector<const std::vector<double>*> cdf_of(uncertain.size(), nullptr);
     for (size_t ui = 0; ui < uncertain.size(); ++ui) {
         const size_t k = uncertain[ui];
         const int R = r_cnt[k];
-        const int key_p = int(std::lround(p_open[k] * double(2 * R)));
-        auto [it, fresh] = cdf_cache.try_emplace({R, key_p});
+        auto [it, fresh] = cdf_cache.try_emplace({R, p_open[k]});
         if (fresh) {
             auto& cdf = it->second;
             cdf.resize(size_t(R + 1));
@@ -928,7 +936,7 @@ std::string probe_report_json(const Probe& probe, const ProbeOptions& opt, const
     for (const Footprint& f : zenith.footprints) zenith_sil += f.silhouette() ? 1 : 0;
     const double fp_area = double(k_footprint_m) * k_footprint_m;
     const double ground_area = zenith_sil * fp_area;
-    const double zenith_sil_se = footprint_count_se(zenith).silhouette_se;
+    const double zenith_sil_se = footprint_count_se(zenith, k_body_edge_m, false).silhouette_se;
     const double ground_area_se = zenith_sil_se * fp_area;
     std::map<int, int> cards_hist;
     for (const Site& s : m.sites) ++cards_hist[s.cards];

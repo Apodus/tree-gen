@@ -1266,8 +1266,12 @@ TEST_CASE("[crown_oracle] G-P2 rim straddling T=0.98 produces non-zero count and
     const double opaque_a  = field(tree, "opaque_leaf_area_m2").n;
     const double lai_se    = field(tree, "leaf_area_index_se").n;
 
+    const auto& fmt_rows = field(field(field(field(parsed.root, "modes"), "oracle"), "format"), "rows").a;
+    REQUIRE(fmt_rows.size() == 1u);
+    const double unsat_se  = field(fmt_rows[0], "unsaturated_footprints_se").n;
+
     INFO("sil_se=" << sil_se << " rim_se=" << rim_se << " body_fp_se=" << bfp_se
-                   << " area_se=" << area_se << " lai_se=" << lai_se);
+                   << " area_se=" << area_se << " lai_se=" << lai_se << " unsat_se=" << unsat_se);
     CHECK(sil_se > 0.0);
     CHECK(rim_se > 0.0);
     CHECK(bfp_se > 0.0);
@@ -1275,6 +1279,7 @@ TEST_CASE("[crown_oracle] G-P2 rim straddling T=0.98 produces non-zero count and
     CHECK(gbfp_se > 0.0);
     CHECK(area_se > 0.0);
     CHECK(lai_se > 0.0);
+    CHECK(unsat_se > 0.0);
     CHECK(area_se == Approx(0.25 * sil_se).margin(1e-6));
     CHECK(lai_se == Approx((opaque_a / (area * area)) * area_se).margin(1e-6));
 
@@ -1289,10 +1294,23 @@ TEST_CASE("[crown_oracle] G-P2 rim straddling T=0.98 produces non-zero count and
     REQUIRE(ep.ok);
     CHECK(field(field(ep.root, "tree"), "crown_ground_projected_area_m2_se").n == 0.0);
     CHECK(field(field(field(field(ep.root, "modes"), "oracle"), "directions").a.at(0), "silhouette_se").n == 0.0);
+    CHECK(field(field(field(field(field(ep.root, "modes"), "oracle"), "format"), "rows").a.at(0), "unsaturated_footprints_se").n == 0.0);
+
+    // Direct multi-ray crossing check (Neon L4): a footprint at T = 60/64 (0.9375,
+    // > 1/64 away from k_silhouette_t = 0.98) still carries non-zero binomial crossing SE.
+    cr::FootprintSet multi;
+    cr::Footprint fp;
+    fp.t = 60.0f / 64.0f;
+    multi.footprints.push_back(fp);
+    const double p60 = 60.0 / 64.0;
+    const double q_sil_60 = 1.0 - std::pow(p60, 64) - 64.0 * std::pow(p60, 63) * (1.0 - p60);
+    const double multi_se = cr::footprint_count_se(multi, cr::k_body_edge_m, false).silhouette_se;
+    CHECK(multi_se > 0.0);
+    CHECK(multi_se == Approx(std::sqrt(q_sil_60 * (1.0 - q_sil_60))).margin(1e-6));
 }
 
 TEST_CASE("[crown_oracle] G-P3 exposed SE formulas against closed forms", "[treegen][crown_oracle]") {
-    SECTION("se_mean on constant and two-valued lists") {
+    SECTION("se_mean, se_mean_t, and se_share on closed forms") {
         const std::vector<double> constant{5.0, 5.0, 5.0, 5.0};
         CHECK(cr::detail::se_mean(constant) == 0.0);
         // Two-valued {1, 3}: mean 2, sum sq dev 2, sample var = 2/(2-1) = 2, SE = sqrt(2/2) = 1.
@@ -1301,6 +1319,9 @@ TEST_CASE("[crown_oracle] G-P3 exposed SE formulas against closed forms", "[tree
         CHECK(cr::detail::se_mean(two) == Approx(1.0).margin(1e-12));
         const std::vector<float> four{1.0f, 3.0f, 1.0f, 3.0f};
         CHECK(cr::detail::se_mean(four) == Approx(std::sqrt(1.0 / 3.0)).margin(1e-6));
+        const std::vector<float> halves{0.5f, 0.5f};
+        CHECK(cr::detail::se_mean_t(halves, 64) == Approx(std::sqrt(0.5 / 64.0) / 2.0).margin(1e-12));
+        CHECK(cr::detail::se_share(0.25, 16) == Approx(std::sqrt(0.25 * 0.75 / 16.0)).margin(1e-12));
     }
     SECTION("se_quantile on known ranks and small-n one-sided clamp") {
         // Non-uniform sorted spacing so off-by-one rank shifts change the spread.
@@ -1315,6 +1336,13 @@ TEST_CASE("[crown_oracle] G-P3 exposed SE formulas against closed forms", "[tree
         // Small-n p05, n=10: lo_pos = 0.5 - 0.6892 <= 0 (lower clamp!), hi_pos = 1.1892 (idx 1 -> 1).
         // Full one-sided spread = 1 - 0 = 1.0.
         CHECK(cr::detail::se_quantile(v, 0.05) == Approx(1.0).margin(1e-12));
+        // Exact discrete handoff (Carbon Low #3): n=19, q=0.95 -> q*n = 18.05, d = 0.95,
+        // hi_pos = 19.0 (not > 19), k_hi == k_q == 18, k_lo == 17 -> full one-sided step.
+        std::vector<float> v19(19);
+        for (int i = 0; i < 19; ++i) v19[size_t(i)] = float(i * i);
+        CHECK(cr::detail::se_quantile(v19, 0.95) == Approx(double(18 * 18 - 17 * 17)).margin(1e-12));
+        // Exact discrete handoff at lower end: n=10, q=0.10 -> k_lo == k_q == 0, k_hi == 1.
+        CHECK(cr::detail::se_quantile(v, 0.10) == Approx(1.0).margin(1e-12));
     }
     SECTION("mae_se on known |err| list") {
         // {0.1, 0.3, 0.1, 0.3}: mean 0.2, SSE 0.04, var/n = 0.04 / 3 / 4 = 1/300.
@@ -1453,7 +1481,7 @@ TEST_CASE("[crown_oracle] G-P5a low-sun slab at 10 and 15 deg", "[treegen][crown
     }
 }
 
-TEST_CASE("[crown_oracle] G-P5b/P5c optical_depth directional (2,1,0) and scalar channel gates", "[treegen][crown_oracle]") {
+TEST_CASE("[crown_oracle] G-P5b/P5c optical_depth directional (3,2,1) and scalar channel gates", "[treegen][crown_oracle]") {
     constexpr int n = 9;
     constexpr float cell = 0.2f;
     std::vector<float> cells(size_t(n) * n * n * 4, 0.0f);
@@ -1464,16 +1492,16 @@ TEST_CASE("[crown_oracle] G-P5b/P5c optical_depth directional (2,1,0) and scalar
     cells[centre + 2] = 2.0f;
     cells[centre + 3] = 7.0f;
     const cr::CrownVolume v = cr::CrownVolume::from_cells(vec3{-0.9f, -0.9f, -0.9f}, cell, n, n, n, cells);
-    // Ray through origin along normalized({2, 1, 0}) crosses [-0.1, 0.1]^3 from
-    // (-0.1, -0.05, 0) to (+0.1, +0.05, 0): exact path length = 0.1 * sqrt(5).
-    const vec3 dir = treegen::normalized(vec3{2.0f, 1.0f, 0.0f});
+    // Ray through origin along normalized({3, 2, 1}) exercises all three axes
+    // asymmetrically; crosses [-0.1, 0.1]^3 between x = -0.1 and x = +0.1:
+    // exact path length = 0.2 * sqrt(14) / 3.
+    const vec3 dir = treegen::normalized(vec3{3.0f, 2.0f, 1.0f});
     const vec3 origin = -dir * 5.0f;
-    const double len = 0.1 * std::sqrt(5.0);
+    const double len = 0.2 * std::sqrt(14.0) / 3.0;
 
-    SECTION("G-P5b axis_projected along non-symmetric (2, 1, 0)") {
+    SECTION("G-P5b axis_projected along non-symmetric (3, 2, 1)") {
         const cr::ExtinctionModel axis{cr::ExtinctionKind::axis_projected, 0.5f, 1.0f};
-        // (|2/sqrt5| * 0.5 + |1/sqrt5| * 2.0) * (0.1 * sqrt5) = (1.0 + 2.0) * 0.1 = 0.30.
-        const double expected = (std::abs(double(dir.x)) * 0.5 + std::abs(double(dir.y)) * 2.0) * len;
+        const double expected = (std::abs(double(dir.x)) * 0.5 + std::abs(double(dir.y)) * 2.0 + std::abs(double(dir.z)) * 7.0) * len;
         const float tau = v.optical_depth(origin, dir, 0.0f, axis);
         CHECK(tau == Approx(expected).margin(1e-5));
         CHECK(tau == v.integrals(origin, dir)[1]);

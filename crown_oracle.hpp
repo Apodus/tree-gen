@@ -71,10 +71,16 @@ struct Footprint {
     bool  silhouette() const { return t < k_silhouette_t; }
     bool  body() const { return in_body(k_body_edge_m); }
     // The one body predicate: silhouette footprints at least min_edge_m from an
-    // outside centre. Edge distances are centre-to-centre on the 0.5 m lattice
-    // (0.5, 0.707, 1.0, 1.118, ...), so every threshold in (0.707, 1.0] is the same rule.
+    // outside centre. Edge distances are centre to centre on the footprint
+    // lattice, d = pitch * sqrt(n) for n a sum of two squares (0.5, 0.707, 1.0,
+    // 1.118, 1.414, ... m at a 0.5 m pitch): a threshold is only meaningful at
+    // those distances, and every threshold in (0.707, 1.0] is the same rule.
     bool  in_body(float min_edge_m) const { return silhouette() && edge_distance >= min_edge_m; }
 };
+// The pitch the rim/body split assumes (k_body_edge_m = 2 pitches: the 0.707 m
+// ring is rim, the 1.0 m ring body) and the exact-lattice plate gate derives its
+// integers from. A new pitch moves which ring is body: re-derive both.
+static_assert(k_footprint_m == 0.5f, "footprint pitch changed: re-derive the body threshold against the lattice distances");
 
 // The footprint sampler's two jitter streams (one definition site: rays per
 // side and stream id both follow from the purpose; there is no default).

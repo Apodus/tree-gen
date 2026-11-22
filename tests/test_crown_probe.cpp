@@ -271,7 +271,7 @@ TEST_CASE("[crown_oracle] saturated slab: not measurable, body opaque, no slope"
     const cr::CrownVolume volume = cr::CrownVolume::build(probe, cr::k_format_cells);
     std::vector<cr::FormatElevation> fmt;
     for (const float e : {30.0f, 45.0f, 60.0f, 90.0f}) {
-        const cr::FootprintSet set = cr::measure_footprints(probe, cr::sun_direction(e, 0.0f), cr::PlaneKind::beam, kLeaves);
+        const cr::FootprintSet set = cr::measure_footprints(probe, cr::sun_direction(e, 30.0f), cr::PlaneKind::beam, kLeaves);
         // The slab's interior: lines that cross the mid-plane at least 3 m from
         // its sides (the sides of a finite slab transmit through its corners).
         const vec3 s = set.sun.dir;

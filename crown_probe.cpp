@@ -6,6 +6,7 @@
 #include <atomic>
 #include <cmath>
 #include <exception>
+#include <map>
 #include <mutex>
 #include <numeric>
 #include <stdexcept>
@@ -227,8 +228,17 @@ void CrownMesh::add_leaves(std::span<const float> positions, std::span<const flo
 Probe::Probe(CrownMesh mesh) : m_mesh(std::move(mesh)) {
     const size_t n = m_mesh.triangles.size();
     m_coverage.assign(n, 1.0f);
-    for (size_t t = 0; t < n; ++t)
-        if (m_mesh.triangles[t].site >= 0) m_coverage[t] = uv_triangle_coverage(m_mesh.atlas, m_mesh.triangles[t].uv);
+    // Cards share a handful of UV triangles (the oak's 7376 leaf triangles have
+    // 4 distinct ones), so the rasterised coverage is memoised by the exact UV
+    // triple: the same function of the same arguments, computed once.
+    std::map<std::array<std::array<float, 2>, 3>, float> memo;
+    for (size_t t = 0; t < n; ++t) {
+        if (m_mesh.triangles[t].site < 0) continue;
+        const auto& uv = m_mesh.triangles[t].uv;
+        auto [it, fresh] = memo.try_emplace(uv, 0.0f);
+        if (fresh) it->second = uv_triangle_coverage(m_mesh.atlas, uv);
+        m_coverage[t] = it->second;
+    }
 
     m_min = vec3{1e30f, 1e30f, 1e30f};
     m_max = vec3{-1e30f, -1e30f, -1e30f};

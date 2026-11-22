@@ -19,11 +19,18 @@
 
 namespace treegen {
 
-GeneratedTree generate_tree(const Scenario& s, uint64_t cli_seed, const GenerateOptions& options) {
+namespace {
+bool scenario_has_leaves(const Scenario& s, const TreeSkeleton& skel) {
+    return s.tree.leaves.geometry_type == LeafGeometryType::BranchStrip
+           || (!skel.leaf_sites.empty() && s.tree.leaves.leaf_density_per_meter > 0.0f);
+}
+}  // namespace
+
+GrownTree grow_tree(const Scenario& s, uint64_t cli_seed) {
     if (s.kind != "tree")
         throw std::runtime_error("generate_tree: scenario '" + s.name + "' is kind '" + s.kind + "', not tree");
 
-    GeneratedTree g;
+    GrownTree g;
     g.seed_effective = cli_seed ^ s.scenario_fnv;
     const uint64_t seed_effective = g.seed_effective;
 
@@ -37,7 +44,13 @@ GeneratedTree generate_tree(const Scenario& s, uint64_t cli_seed, const Generate
         auto opts = leaf_placement::options_from_descriptor(s.tree.leaves);
         skel.leaf_sites = leaf_placement::generate_leaf_sites(skel, opts, seed_effective);
     }
-    if (!options.levels) return g;
+    return g;
+}
+
+TreeLevels emit_levels(const Scenario& s, GrownTree grown) {
+    TreeLevels g{std::move(grown)};
+    const uint64_t seed_effective = g.seed_effective;
+    const TreeSkeleton& skel = g.skeleton;
 
     // C4 P4 + C10 — emit 3 LODs (L0, L1, L2) into a single multi-mesh GLB.
     // Per-LOD radial counts allocated by face_budget; per-LOD wind weights
@@ -57,11 +70,7 @@ GeneratedTree generate_tree(const Scenario& s, uint64_t cli_seed, const Generate
     // C3 P2 bark diet — per-species L0 (oak/pine 10k; broadleaf ≈natural).
     const LodBudget budget = lod_budget_for_species(s.tree.leaves.shape);
 
-    const bool is_strip   = (s.tree.leaves.geometry_type == LeafGeometryType::BranchStrip);
-    const bool has_leaves = is_strip
-                            || (!skel.leaf_sites.empty() && s.tree.leaves.leaf_density_per_meter > 0.0f);
-
-    if (has_leaves) {
+    if (scenario_has_leaves(s, skel)) {
         const LeafBudget leaf_budget = leaf_budget_from(s.tree.leaves.lod_leaf_triangle_budget);
         LeafMeshOptions leaf_geom_opts;
         leaf_geom_opts.geometry_type         = s.tree.leaves.geometry_type;
@@ -75,8 +84,13 @@ GeneratedTree generate_tree(const Scenario& s, uint64_t cli_seed, const Generate
     } else {
         g.lods = emit_all_lods(skel, bopts, budget, s.tree.height_m, seed_effective);
     }
+    return g;
+}
 
-    if (!options.glb) return g;
+GeneratedTree generate_tree(const Scenario& s, uint64_t cli_seed) {
+    GeneratedTree g{emit_levels(s, grow_tree(s, cli_seed))};
+    const uint64_t seed_effective = g.seed_effective;
+    const bool has_leaves = scenario_has_leaves(s, g.skeleton);
 
     // C6 P4 — bark textures (per-species, shared across LODs).
     const LeafShape bark_species = s.tree.leaves.shape;

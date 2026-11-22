@@ -37,12 +37,20 @@ treegen::Scenario with_leaves_fields(const std::string& species, const std::stri
     return treegen::parse_scenario(text, "c3_" + species + ".json + " + fields);
 }
 
-struct Readout {
+// The site- and budget-based overrides act on the levels; their readout needs
+// no image, GLB or probe. (L0 kept sites = the probe's sites: the
+// [crown_oracle] site-rule case gates that equality on this tree.)
+struct Levels {
     size_t sites = 0;
     size_t l0_leaf_triangles = 0;
-    double alpha_coverage = 0.0;
 };
-Readout read(const treegen::GeneratedTree& g) {
+Levels levels_of(const treegen::TreeLevels& g) {
+    return {g.lods.at(0).leaf_kept_sites.size(), g.lods.at(0).leaf_indices_u32.size() / 3};
+}
+Levels levels_of(const treegen::Scenario& s) { return levels_of(treegen::emit_levels(s, treegen::grow_tree(s, 42))); }
+
+// The grid override acts on the atlas: area-weighted alpha coverage of L0's leaf cards, through the probe's loader.
+double alpha_coverage(const treegen::GeneratedTree& g) {
     const treegen::crown::Probe probe(treegen::crown::load_crown_from_glb(g.glb, 0).mesh);
     double card = 0.0, opaque = 0.0;
     for (uint32_t t = 0; t < probe.mesh().triangles.size(); ++t) {
@@ -52,7 +60,7 @@ Readout read(const treegen::GeneratedTree& g) {
         card += a;
         opaque += a * probe.triangle_coverage(t);
     }
-    return {probe.mesh().sites.size(), probe.mesh().leaf_triangles, opaque / card};
+    return opaque / card;
 }
 
 }  // namespace
@@ -78,29 +86,30 @@ TEST_CASE("[treegen_overrides] absent in every tracked scenario; explicit defaul
     CHECK(treegen::generate_tree(s, 42).glb == tsp::generated_tree("oak", 42).glb);
 }
 
-TEST_CASE("[treegen_overrides] shell_fraction, leaf budget and cluster grid are live", "[treegen][treegen_overrides]") {
-    const Readout base = read(rynx::test_support::generated_tree("oak", 42));
+TEST_CASE("[treegen_overrides] shell_fraction and the leaf budget are live", "[treegen][treegen_overrides]") {
+    const Levels base = levels_of(rynx::test_support::generated_tree("oak", 42));
     REQUIRE(base.l0_leaf_triangles < 8000u);   // the L0 budget does not bind today, so a lower prune shows
 
     SECTION("shell_fraction 0.30 keeps more of the interior") {
-        const Readout r = read(treegen::generate_tree(with_leaves_fields("oak", "\"shell_fraction\": 0.30,"), 42));
+        const Levels r = levels_of(with_leaves_fields("oak", "\"shell_fraction\": 0.30,"));
         INFO("sites " << base.sites << " -> " << r.sites);
         CHECK(r.sites > base.sites);
     }
     SECTION("lod_leaf_triangle_budget[0] halved") {
-        const Readout r = read(treegen::generate_tree(
-            with_leaves_fields("oak", "\"lod_leaf_triangle_budget\": [4000, 4000, 4000, 0],"), 42));
+        const Levels r = levels_of(with_leaves_fields("oak", "\"lod_leaf_triangle_budget\": [4000, 4000, 4000, 0],"));
         INFO("L0 leaf triangles " << base.l0_leaf_triangles << " -> " << r.l0_leaf_triangles);
         CHECK(r.l0_leaf_triangles <= 4000u);
         CHECK(r.l0_leaf_triangles < base.l0_leaf_triangles);
     }
-    SECTION("cluster_cell_grid [6, 2] lowers alpha coverage") {
-        // Cell coverage scales as nx * ny * min(1/nx, 1/ny)^2: 12/16 at [4, 3],
-        // 12/36 at [6, 2] (leaf_atlas.cpp's slot radius).
-        const Readout r = read(treegen::generate_tree(with_leaves_fields("oak", "\"cluster_cell_grid\": [6, 2],"), 42));
-        INFO("alpha coverage " << base.alpha_coverage << " -> " << r.alpha_coverage);
-        CHECK(r.alpha_coverage < 0.75 * base.alpha_coverage);
-    }
+}
+
+TEST_CASE("[treegen_overrides] cluster_cell_grid [6, 2] lowers alpha coverage", "[treegen][treegen_overrides]") {
+    // Cell coverage scales as nx * ny * min(1/nx, 1/ny)^2: 12/16 at [4, 3],
+    // 12/36 at [6, 2] (leaf_atlas.cpp's slot radius).
+    const double base = alpha_coverage(rynx::test_support::generated_tree("oak", 42));
+    const double r = alpha_coverage(treegen::generate_tree(with_leaves_fields("oak", "\"cluster_cell_grid\": [6, 2],"), 42));
+    INFO("alpha coverage " << base << " -> " << r);
+    CHECK(r < 0.75 * base);
 }
 
 TEST_CASE("[treegen_overrides] site-based overrides are refused on branch_strip", "[treegen][treegen_overrides]") {

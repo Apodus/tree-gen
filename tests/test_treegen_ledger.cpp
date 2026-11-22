@@ -83,13 +83,11 @@ struct ShippedTree {
     ts::TreeLedger ledger;
 };
 
-// The tool's tree branch: treegen::generate_tree, the one copy of the pipeline
-// (its levels; the ledger reads no image or GLB byte).
+// The tool's tree branch: the one copy of the pipeline, to its levels stage
+// (the ledger reads no image or GLB byte).
 ShippedTree build_shipped(const std::string& species, uint64_t seed) {
     const ts::Scenario s = load_species(species);
-    ts::GenerateOptions levels_only;
-    levels_only.glb = false;
-    const ts::GeneratedTree g = ts::generate_tree(s, seed, levels_only);
+    const ts::TreeLevels g = ts::emit_levels(s, ts::grow_tree(s, seed));
     ShippedTree t;
     t.species = species;
     t.seed    = seed;

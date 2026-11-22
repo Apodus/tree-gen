@@ -69,32 +69,72 @@ struct Footprint {
     float crossings_geometric = 0.0f;  // mean over its rays
     float crossings_opaque    = 0.0f;
     bool  silhouette() const { return t < k_silhouette_t; }
-    bool  body() const { return silhouette() && edge_distance >= k_body_edge_m; }
+    bool  body() const { return in_body(k_body_edge_m); }
+    // The one body predicate: silhouette footprints at least min_edge_m from an
+    // outside centre. Edge distances are centre-to-centre on the 0.5 m lattice
+    // (0.5, 0.707, 1.0, 1.118, ...), so every threshold in (0.707, 1.0] is the same rule.
+    bool  in_body(float min_edge_m) const { return silhouette() && edge_distance >= min_edge_m; }
 };
+
+// The footprint sampler's two jitter streams (one definition site: rays per
+// side and stream id both follow from the purpose; there is no default).
+// - selection: the 8 x 8 rays that measure a footprint's T;
+// - format: the 32 x 32 rays, independent of selection's, that re-measure the
+//   format rule's unsaturated footprints, so selecting on a noisy T cannot bias its MAE.
+enum class RayStream { selection, format };
+int      rays_per_side(RayStream s);
+uint64_t stream_id(RayStream s);
 
 struct FootprintSet {
     SunDirection           sun;
     PlaneKind              kind = PlaneKind::beam;
+    Occluders              occluders = Occluders::leaves_and_bark;   // set by measure_footprints
     vec3                   origin, e1, e2;   // plane frame
     float                  ray_back = 0.0f;  // rays start this far behind the plane
     float                  t_max = 0.0f;     // ... and end this far along the sun direction
     std::vector<Footprint> footprints;
-    // The per_side^2 jittered-stratified ray origins of footprint k
-    // (deterministic in `stream`; direction = sun.dir).
-    void rays(size_t k, std::vector<vec3>& out, int per_side = k_rays_per_side,
-              uint64_t stream = k_footprint_ray_stream) const;
+    // The rays_per_side(s)^2 jittered-stratified ray origins of footprint k
+    // (deterministic in s; direction = sun.dir).
+    void rays(size_t k, std::vector<vec3>& out, RayStream s) const;
 };
 
 // Measures every footprint of the plane's grid (the crown's projection plus one
-// footprint of margin) and assigns edge distances.
-FootprintSet measure_footprints(const Probe& probe, const SunDirection& sun, PlaneKind kind);
+// footprint of margin) against population `occ` and assigns edge distances.
+FootprintSet measure_footprints(const Probe& probe, const SunDirection& sun, PlaneKind kind, Occluders occ);
 
+// Standard errors (R-CR6; one definition site, crown_oracle.cpp "SE"). Every
+// sampled statistic of the report carries `<name>_se` beside it:
+// - a mean of footprint T: ray sampling, sqrt(sum T (1 - T) / R) / n over its n
+//   footprints of R rays (the geometry fixed, the jitter re-drawn);
+// - a share or a quantile over footprints or sites: the population's, binomial
+//   sqrt(p (1 - p) / n), and for a quantile the half-width of the order
+//   statistics one binomial SE either side of its rank;
+// - a mean over footprints or sites of anything else (crossings, open sky,
+//   |error| for an MAE): std / sqrt(n), footprints treated as independent.
+// Counts, areas, coverage and the site histogram are exact functions of the
+// bytes and carry none.
 struct RegionStats {
     int   footprints = 0;
     float mean = 0.0f, p50 = 0.0f, p95 = 0.0f, share_opaque = 0.0f;
+    float mean_se = 0.0f, p50_se = 0.0f, p95_se = 0.0f, share_opaque_se = 0.0f;
 };
-// Body statistics over silhouette footprints with d >= min_edge_m (nullopt: none).
+// Body statistics over the footprints Footprint::in_body(min_edge_m) admits (nullopt: none).
 std::optional<RegionStats> body_stats(const FootprintSet& set, float min_edge_m);
+
+// --- Stop rule (plan S-P0a) ---------------------------------------------------
+// One direction: the body is opaque when the share of its footprints with
+// T < k_opaque_t is at least k_stop_body_share; no body is not opaque.
+inline constexpr float k_stop_body_share        = 0.5f;
+inline constexpr float k_stop_min_elevation_deg = 30.0f;
+bool body_opaque(const FootprintSet& beam);
+// Per elevation: opaque at every azimuth sampled there. The crown is opaque to
+// direct sun when at least one elevation >= k_stop_min_elevation_deg was
+// sampled and the body is opaque at every such elevation.
+struct StopRule {
+    std::vector<std::pair<float, bool>> opaque_by_elevation;   // ascending elevation
+    bool                                crown_opaque_to_direct_sun = false;
+};
+StopRule stop_rule(const std::vector<std::pair<float, bool>>& body_opaque_by_direction);
 
 // --- Format rule (plan 5.1, R10) ---------------------------------------------
 
@@ -113,17 +153,22 @@ struct FormatRow {
     int   unsaturated = 0;
     bool  measurable = false;
     float scalar_mae = 0.0f, axis_mae = 0.0f, g_eff = 0.0f, saturated_share = 0.0f;
+    float scalar_mae_se = 0.0f, axis_mae_se = 0.0f, saturated_share_se = 0.0f;
+    float g_eff_se = 0.0f;   // a fitted parameter: sqrt(SSE / (n - 1) / sum (dT/dg)^2), the linearised least-squares SE
 };
 struct FormatDecision {
     std::string            decision;   // scalar | axis_projected | escalate | undecidable
     float                  g = 0.0f;   // scalar fit (0 when undecidable)
     float                  clumping = 1.0f;
+    float                  g_se = 0.0f, clumping_se = 0.0f;   // as FormatRow::g_eff_se (0 when not fitted)
     std::vector<FormatRow> rows;
 };
 FormatDecision decide_format(const std::vector<FormatElevation>& elevations);
 // The format-rule input for one footprint set (beam plane): footprints whose
-// 64-ray T lies in [0.05, 0.95], re-measured at k_format_rays_per_side^2 rays,
-// each ray marched through `volume`.
+// selection T lies in [0.05, 0.95], re-measured on the format stream, each ray
+// marched through `volume`. The set must be measured on Occluders::leaves_only
+// (R-CR1: the volume holds leaves only, so selection and score both exclude
+// bark); any other set throws.
 void add_format_footprints(const Probe& probe, const FootprintSet& set, const CrownVolume& volume, FormatElevation& into,
                            const std::function<bool(const Footprint&)>& keep = {});
 
@@ -140,9 +185,12 @@ struct ProbeOptions {
 // `s` as a quoted, escaped JSON string.
 std::string json_string(const std::string& s);
 
-// The report's "input" object: the loader's arguments, one spelling per input.
-std::string probe_input_scenario(const std::string& scenario_path, uint64_t seed, int lod);
-std::string probe_input_glb(const std::string& glb_path, int lod);
+// The report's "input" object: the loader's arguments, one spelling per input,
+// and the probed GLB bytes' digest (fnv1a64, det_rng.hpp), so a report names the
+// bytes it measured whichever path produced them.
+std::string glb_digest(std::span<const uint8_t> glb);   // "0x%016x"
+std::string probe_input_scenario(const std::string& scenario_path, uint64_t seed, std::span<const uint8_t> glb, int lod);
+std::string probe_input_glb(const std::string& glb_path, std::span<const uint8_t> glb, int lod);
 
 // The versioned JSON document: {"schema", "input", "tree", "modes": {...}}.
 // `input_json` is the loader's echo, already a JSON object.

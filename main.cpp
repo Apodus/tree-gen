@@ -379,7 +379,7 @@ int main(int argc, char** argv) {
                 return 1;
             }
             const std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-            const std::string input = treegen::crown::probe_input_glb(glb_path, probe_lod_index);
+            const std::string input = treegen::crown::probe_input_glb(glb_path, bytes, probe_lod_index);
             return write_probe_report(treegen::crown::probe_glb_report(bytes, probe_lod_index, probe_options, input),
                                       probe_path);
         }
@@ -441,9 +441,11 @@ int main(int argc, char** argv) {
             // C3 P2 — grow the skeleton (generate_tree); print summary stats;
             // optional JSON dump. Levels and the GLB are built only for --out
             // and --probe-crown.
-            treegen::GenerateOptions gen_opts;
-            gen_opts.levels = !out_path.empty() || !probe_path.empty();
-            const treegen::GeneratedTree gen = treegen::generate_tree(s, cli_seed, gen_opts);
+            // Without --out or --probe-crown only the grown stage runs (the tool
+            // never built levels for a skeleton-only call).
+            const bool build = !out_path.empty() || !probe_path.empty();
+            const treegen::GeneratedTree gen = build ? treegen::generate_tree(s, cli_seed)
+                                                     : treegen::GeneratedTree{{treegen::grow_tree(s, cli_seed)}};
             const treegen::TreeSkeleton& skel    = gen.skeleton;
             const treegen::TrunkCapsule& capsule = gen.capsule;
 
@@ -504,7 +506,7 @@ int main(int argc, char** argv) {
             // The probe reads the GLB bytes generate_tree returned (what --out
             // writes), through the same loader as --glb.
             if (!probe_path.empty()) {
-                const std::string input = treegen::crown::probe_input_scenario(scenario_path, cli_seed, probe_lod_index);
+                const std::string input = treegen::crown::probe_input_scenario(scenario_path, cli_seed, gen.glb, probe_lod_index);
                 const int rc = write_probe_report(
                     treegen::crown::probe_glb_report(gen.glb, probe_lod_index, probe_options, input), probe_path);
                 if (rc != 0) return rc;

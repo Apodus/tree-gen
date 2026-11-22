@@ -341,9 +341,12 @@ void Probe::traverse(vec3 origin, vec3 dir, float t_max, Visit&& visit) const {
     }
 }
 
-bool Probe::occluded(vec3 origin, vec3 dir, int32_t skip_site) const {
+const char* occluders_name(Occluders o) { return o == Occluders::leaves_only ? "leaves_only" : "leaves_and_bark"; }
+
+bool Probe::occluded(vec3 origin, vec3 dir, int32_t skip_site, Occluders occ) const {
     bool hit = false;
     traverse(origin, dir, 1e30f, [&](uint32_t t, float b1, float b2) {
+        if (occ == Occluders::leaves_only && m_mesh.triangles[t].site < 0) return false;
         if (skip_site >= 0 && m_mesh.triangles[t].site == skip_site) return false;
         if (!hit_opaque(t, b1, b2)) return false;
         hit = true;
@@ -352,12 +355,13 @@ bool Probe::occluded(vec3 origin, vec3 dir, int32_t skip_site) const {
     return hit;
 }
 
-bool Probe::occluded_segment(vec3 origin, vec3 target, int32_t skip_site) const {
+bool Probe::occluded_segment(vec3 origin, vec3 target, int32_t skip_site, Occluders occ) const {
     const vec3 d = target - origin;
     const float len = length(d);
     if (len <= 2.0f * k_ray_t_min) return false;
     bool hit = false;
     traverse(origin, d / len, len - k_ray_t_min, [&](uint32_t t, float b1, float b2) {
+        if (occ == Occluders::leaves_only && m_mesh.triangles[t].site < 0) return false;
         if (skip_site >= 0 && m_mesh.triangles[t].site == skip_site) return false;
         if (!hit_opaque(t, b1, b2)) return false;
         hit = true;

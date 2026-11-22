@@ -91,11 +91,20 @@ LoadedCrown load_crown_from_glb(std::span<const uint8_t> glb, int lod);
 
 // --- Ray queries --------------------------------------------------------------
 
+// The two oracle populations (commander ruling R-CR1). Every occlusion query
+// names one; there is no default.
+// - leaves_and_bark: the whole crown, as every shadow path sees it (transmittance
+//   profile, regions, stop rule, sunlit modes).
+// - leaves_only: what a leaf-medium volume represents (bark stays real geometry),
+//   so the population the format rule scores the volume against.
+enum class Occluders { leaves_and_bark, leaves_only };
+const char* occluders_name(Occluders o);
+
 struct LineHits {
     int  leaf_geometric = 0;   // leaf triangles the ray intersects, alpha ignored
     int  leaf_opaque    = 0;   // ... that pass the alpha test there
     int  bark           = 0;
-    bool occluded() const { return leaf_opaque > 0 || bark > 0; }
+    bool occluded(Occluders o) const { return leaf_opaque > 0 || (o == Occluders::leaves_and_bark && bark > 0); }
 };
 
 class Probe {
@@ -104,14 +113,12 @@ public:
 
     const CrownMesh& mesh() const { return m_mesh; }
 
-    // Any opaque hit on the ray origin + t * dir, t > 0 (to infinity),
-    // ignoring the triangles of site `skip_site` (-1: none).
-    bool occluded(vec3 origin, vec3 dir, int32_t skip_site) const;
-    // Any opaque hit strictly between origin and target.
-    bool occluded_segment(vec3 origin, vec3 target, int32_t skip_site) const;
-    // 0 or 1: the share of this one ray that is unoccluded.
-    float transmittance(vec3 origin, vec3 dir) const { return occluded(origin, dir, -1) ? 0.0f : 1.0f; }
-    // Every hit on origin + t * dir, t in (0, t_max).
+    // Any opaque hit of population `occ` on the ray origin + t * dir,
+    // t > 1e-4 m (to infinity), ignoring the triangles of site `skip_site` (-1: none).
+    bool occluded(vec3 origin, vec3 dir, int32_t skip_site, Occluders occ) const;
+    // Any opaque hit of population `occ` strictly between origin and target.
+    bool occluded_segment(vec3 origin, vec3 target, int32_t skip_site, Occluders occ) const;
+    // Every hit on origin + t * dir, t in (1e-4 m, t_max); the caller picks the population.
     LineHits line_hits(vec3 origin, vec3 dir, float t_max) const;
 
     // Alpha coverage of one triangle (area-weighted share of its UV footprint's

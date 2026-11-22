@@ -256,9 +256,12 @@ TEST_CASE("[crown_oracle] saturated slab: not measurable, body opaque, no slope"
 // ---- Format rule on synthetic volumes ----------------------------------------------
 
 namespace {
+// Card normals: uniform on the sphere; all +z; all +x (vertical, facing the
+// azimuth-0 sun, so only an axis grid built from the real normals fits).
+enum class Orient { random, horizontal, facing_x };
 // error_amp: the oracle is offset by +amp at even and -amp at odd elevation
 // indices, an error of known size that no clumping factor can absorb.
-cr::FormatDecision format_on_slab(bool horizontal, double error_amp = 0.0) {
+cr::FormatDecision format_on_slab(Orient orient, double error_amp = 0.0) {
     // The format rule's subject is the two candidate grids and the decision,
     // not the oracle (arms (a)-(c) gate that). So the "oracle" transmittance is
     // the medium's own: leaf area index L in a slab of thickness d crossed at
@@ -273,13 +276,14 @@ cr::FormatDecision format_on_slab(bool horizontal, double error_amp = 0.0) {
     constexpr int n = 128;
     const double L = double(n) * n * side * side / (double(w) * w);
     treegen::pcg32 rng;
-    rng.seed(horizontal ? 21 : 22, 0x5AB5EEDull);
+    rng.seed(orient == Orient::horizontal ? 21 : orient == Orient::random ? 22 : 23, 0x5AB5EEDull);
     Prim p;
     for (int i = 0; i < n; ++i)
         for (int j = 0; j < n; ++j) {
             const vec3 c{(i + rng.next_float_01()) * w / n, (j + rng.next_float_01()) * w / n, rng.next_float_01()};
-            const vec3 nrm = horizontal ? vec3{0, 0, 1}
-                                        : unit_from(2.0f * rng.next_float_01() - 1.0f, float(2 * k_pi) * rng.next_float_01());
+            const vec3 nrm = orient == Orient::horizontal ? vec3{0, 0, 1}
+                           : orient == Orient::facing_x   ? vec3{1, 0, 0}
+                           : unit_from(2.0f * rng.next_float_01() - 1.0f, float(2 * k_pi) * rng.next_float_01());
             vec3 a, b;
             basis(nrm, a, b);
             const float rot = float(2 * k_pi) * rng.next_float_01();
@@ -297,7 +301,9 @@ cr::FormatDecision format_on_slab(bool horizontal, double error_amp = 0.0) {
     int ei = 0;
     for (const float e : {10.0f, 20.0f, 30.0f, 45.0f, 60.0f, 70.0f, 75.0f, 90.0f}) {
         const vec3 s = cr::sun_direction(e, 0.0f).dir;
-        const double g = horizontal ? std::sin(e * k_pi / 180.0) : 0.5;
+        const double g = orient == Orient::horizontal ? std::sin(e * k_pi / 180.0)
+                       : orient == Orient::facing_x   ? std::cos(e * k_pi / 180.0)
+                                                      : 0.5;
         const double offset = (ei++ % 2 == 0) ? error_amp : -error_amp;
         cr::FormatElevation fe;
         fe.elevation_deg = e;
@@ -322,7 +328,7 @@ cr::FormatDecision format_on_slab(bool horizontal, double error_amp = 0.0) {
 }  // namespace
 
 TEST_CASE("[crown_oracle] format rule: random orientation decides scalar, G_eff 0.5", "[treegen][crown_oracle]") {
-    const cr::FormatDecision d = format_on_slab(false);
+    const cr::FormatDecision d = format_on_slab(Orient::random);
     for (const auto& r : d.rows) {
         INFO("e " << r.elevation_deg << " n " << r.unsaturated << " scalar " << r.scalar_mae << " axis " << r.axis_mae
                   << " g_eff " << r.g_eff);
@@ -333,7 +339,7 @@ TEST_CASE("[crown_oracle] format rule: random orientation decides scalar, G_eff 
 }
 
 TEST_CASE("[crown_oracle] format rule: horizontal cards decide axis-projected, G_eff sin(e)", "[treegen][crown_oracle]") {
-    const cr::FormatDecision d = format_on_slab(true);
+    const cr::FormatDecision d = format_on_slab(Orient::horizontal);
     for (const auto& r : d.rows) {
         INFO("e " << r.elevation_deg << " n " << r.unsaturated << " scalar " << r.scalar_mae << " axis " << r.axis_mae
                   << " g_eff " << r.g_eff);
@@ -345,11 +351,26 @@ TEST_CASE("[crown_oracle] format rule: horizontal cards decide axis-projected, G
     CHECK(d.clumping == 1.0f);
 }
 
+TEST_CASE("[crown_oracle] format rule: vertical cards facing the sun decide axis-projected from their own normals", "[treegen][crown_oracle]") {
+    // G = cos(e) for cards facing +x under an azimuth-0 sun: no single scalar G
+    // fits, and an axis grid built from any normal but the cards' own (e.g. a
+    // constant +z, which the horizontal arm cannot tell from the truth) is off
+    // by far more than the threshold.
+    const cr::FormatDecision d = format_on_slab(Orient::facing_x);
+    for (const auto& r : d.rows) {
+        INFO("e " << r.elevation_deg << " scalar " << r.scalar_mae << " axis " << r.axis_mae);
+        CHECK(r.measurable);
+        CHECK(r.axis_mae <= cr::k_format_max_mae);
+    }
+    CHECK(d.decision == "axis_projected");
+    CHECK(d.clumping == 1.0f);
+}
+
 TEST_CASE("[crown_oracle] format rule: an error of known size above the threshold escalates", "[treegen][crown_oracle]") {
     // The same exact horizontal slab with the oracle moved by +-0.08 (alternating
     // by elevation): every model's MAE is >= 0.08 > 0.05, and one clumping
     // factor cannot follow a sign that alternates, so the rule must say so.
-    const cr::FormatDecision d = format_on_slab(true, 0.08);
+    const cr::FormatDecision d = format_on_slab(Orient::horizontal, 0.08);
     for (const auto& r : d.rows) {
         INFO("e " << r.elevation_deg << " scalar " << r.scalar_mae << " axis " << r.axis_mae);
         CHECK(r.measurable);
@@ -600,6 +621,25 @@ TEST_CASE("[crown_oracle] site rule: c3_oak 42 L0 sites equal the emitter's kept
     REQUIRE(kept > 100u);
     CHECK(c.mesh.sites.size() == kept);
     for (const auto& s : c.mesh.sites) CHECK(s.cards == 2);   // crossed pair per site (the oak's cluster count)
+}
+
+TEST_CASE("[crown_oracle] the loader reads every triangle the emitter wrote", "[treegen][crown_oracle]") {
+    // Both probe paths share the loader, so their agreement cannot see a
+    // primitive it drops; the emitter's own index counts can.
+    for (const char* species : {"oak", "pine"}) {
+        const treegen::GeneratedTree& g = rynx::test_support::generated_tree(species, 42);
+        for (int lod = 0; lod < int(g.lods.size()); ++lod) {
+            const cr::LoadedCrown c = cr::load_crown_from_glb(g.glb, lod);
+            const auto& l = g.lods[size_t(lod)];
+            INFO(species << " L" << lod << ": bark " << c.mesh.bark_triangles << " / " << l.indices_u32.size() / 3
+                         << ", leaf " << c.mesh.leaf_triangles << " / " << l.leaf_indices_u32.size() / 3);
+            REQUIRE(l.has_leaves);
+            CHECK(c.mesh.bark_triangles == l.indices_u32.size() / 3);
+            CHECK(c.mesh.leaf_triangles == l.leaf_indices_u32.size() / 3);
+            CHECK(c.mesh.bark_triangles > 0u);
+            CHECK(c.mesh.leaf_triangles > 0u);
+        }
+    }
 }
 
 // ---- Geometric normals only (K16) -------------------------------------------------------------

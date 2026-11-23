@@ -31,11 +31,13 @@ struct GlbRow {
     uint64_t    fnv1a64;  // det_rng.hpp fnv1a64 over the GLB bytes
 };
 
+// S-P1 regenerated table (includes _RYNX_CROWN_VOLUME v2 F2_tensor Option 2A,
+// clumping = 1.05, L0-AABB cell_m = max(0.20, longest/64) + union-of-LODs pad).
 constexpr std::array<GlbRow, 4> k_glb_table = {{
-    {"oak",   42, 4894052, 0xe6153299cd0b20d8ull},
-    {"maple", 42, 5545848, 0xe6457538c8f68514ull},
-    {"birch", 42, 4816880, 0x7ea873b367fe7cefull},
-    {"pine",  42, 4081752, 0x8323fdaf32805e8eull},
+    {"oak",   42, 5540740, 0x7662f20765224e0cull},
+    {"maple", 42, 6362904, 0xb276cd81467f9a7aull},
+    {"birch", 42, 5571216, 0xaf62562131aed617ull},
+    {"pine",  42, 4247540, 0x7a929c7e92cb82e4ull},
 }};
 
 uint64_t glb_fnv(const std::vector<uint8_t>& b) {

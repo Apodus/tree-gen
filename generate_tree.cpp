@@ -4,6 +4,8 @@
 
 #include "bark_texture.hpp"
 #include "branch_mesh.hpp"
+#include "crown_probe.hpp"
+#include "crown_volume.hpp"
 #include "det_rng.hpp"
 #include "face_budget.hpp"
 #include "leaf_atlas.hpp"
@@ -12,6 +14,9 @@
 #include "leaf_placement.hpp"
 #include "space_colonization.hpp"
 
+#include <stb_image.h>
+
+#include <algorithm>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -187,6 +192,62 @@ GeneratedTree generate_tree(const Scenario& s, uint64_t cli_seed) {
             md.collision_radius      = g.capsule.radius;
         }
         meshes.push_back(md);
+    }
+
+    // S-P1: build and pack F2_tensor Option 2A crown density volume from L0 leaf
+    // triangles + mip-0 leaf atlas alpha coverage, padded outward with zero voxels
+    // to enclose union(L0..L2) leaf AABBs, and attach to meshes[0].
+    if (has_leaves && !lods.empty() && lods[0].has_leaves && g.images.size() > 4u) {
+        int w = 0, h = 0, comp = 0;
+        const auto& png = g.images[4].png_bytes;
+        unsigned char* rgba = stbi_load_from_memory(
+            reinterpret_cast<const stbi_uc*>(png.data()), static_cast<int>(png.size()), &w, &h, &comp, 4);
+        if (!rgba)
+            throw std::runtime_error(std::string("generate_tree: failed to decode leaf atlas PNG for crown volume: ")
+                                     + stbi_failure_reason());
+        crown::CrownMesh cm;
+        cm.atlas.width  = w;
+        cm.atlas.height = h;
+        cm.atlas.cutoff = 0.5f;  // matches leaf_prim.material.alpha_cutoff = 0.5f
+        cm.atlas.alpha.resize(size_t(w) * size_t(h));
+        for (size_t i = 0; i < cm.atlas.alpha.size(); ++i) cm.atlas.alpha[i] = rgba[i * 4u + 3u];
+        stbi_image_free(rgba);
+
+        cm.add_leaves(lods[0].leaf_positions, lods[0].leaf_uvs, lods[0].leaf_indices_u32);
+        const crown::Probe l0_probe(std::move(cm));
+
+        vec3 union_min{1e30f, 1e30f, 1e30f};
+        vec3 union_max{-1e30f, -1e30f, -1e30f};
+        for (const auto& lod : lods) {
+            if (!lod.has_leaves) continue;
+            for (size_t i = 0; i + 2 < lod.leaf_positions.size(); i += 3) {
+                const float x = lod.leaf_positions[i + 0];
+                const float y = lod.leaf_positions[i + 1];
+                const float z = lod.leaf_positions[i + 2];
+                union_min = {std::min(union_min.x, x), std::min(union_min.y, y), std::min(union_min.z, z)};
+                union_max = {std::max(union_max.x, x), std::max(union_max.y, y), std::max(union_max.z, z)};
+            }
+        }
+
+        const crown::CrownVolume vol = crown::CrownVolume::build_shipped(l0_probe, union_min, union_max);
+        g.crown_volume = vol.pack_option2a(crown::k_default_crown_clumping);
+
+        CrownVolumeSpec spec{};
+        for (int a = 0; a < 3; ++a) {
+            spec.dims[a]    = g.crown_volume->dims[a];
+        }
+        spec.box_min[0] = g.crown_volume->box_min.x;
+        spec.box_min[1] = g.crown_volume->box_min.y;
+        spec.box_min[2] = g.crown_volume->box_min.z;
+        spec.box_max[0] = g.crown_volume->box_max.x;
+        spec.box_max[1] = g.crown_volume->box_max.y;
+        spec.box_max[2] = g.crown_volume->box_max.z;
+        spec.cell_m     = g.crown_volume->cell_m;
+        spec.rho_cap    = g.crown_volume->rho_cap;
+        spec.clumping   = g.crown_volume->clumping;
+        spec.tex0       = std::span<const uint8_t>(g.crown_volume->tex0.data(), g.crown_volume->tex0.size());
+        spec.tex1       = std::span<const int8_t>(g.crown_volume->tex1.data(), g.crown_volume->tex1.size());
+        meshes[0].crown_volume = spec;
     }
 
     std::string err;

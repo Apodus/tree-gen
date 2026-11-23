@@ -78,6 +78,20 @@ struct PrimitiveData {
     MaterialSpec              material;
 };
 
+// S-P1 `_RYNX_CROWN_VOLUME` v2 payload (Option 2A F2_tensor RGBA8_UNORM + RGBA8_SNORM).
+// Emitted on meshes[0] for leafy trees; absent (dims[0] == 0) otherwise.
+struct CrownVolumeSpec {
+    int   dims[3]     = { 0, 0, 0 };       // {nx, ny, nz}; 0 = not present
+    float box_min[3]  = { 0.0f, 0.0f, 0.0f };
+    float box_max[3]  = { 0.0f, 0.0f, 0.0f };
+    float cell_m      = 0.0f;
+    float rho_cap     = 0.0f;
+    float clumping    = 1.05f;
+    std::span<const uint8_t> tex0;         // nx*ny*nz*4, RGBA8_UNORM
+    std::span<const int8_t>  tex1;         // nx*ny*nz*4, RGBA8_SNORM
+    bool present() const { return dims[0] > 0 && dims[1] > 0 && dims[2] > 0; }
+};
+
 // C2 P7 — per-mesh data for multi-mesh GLB writes (LOD chains). Each MeshData
 // becomes a top-level meshes[i] entry. When lod_index >= 0, the mesh carries
 // `extensions._RYNX_LOD = { lod_index, lod_max_distance_m }`.
@@ -96,6 +110,8 @@ struct MeshData {
     // no bone table for this mesh.
     std::span<const float> bone_table;
     uint32_t               bone_count = 0;
+    // S-P1 `_RYNX_CROWN_VOLUME` v2 density tensor volume (mesh[0] only for leafy trees).
+    CrownVolumeSpec        crown_volume;
 };
 
 namespace glb_detail {
@@ -183,6 +199,15 @@ struct MeshJsonMeta {
     float collision_radius      = 0.0f;
     int   bone_table_bv  = -1;  // C8-wind P1: bufferView idx of bone table; -1 = none
     int   bone_count     = 0;   // C8-wind P1: bone count (ignored when bv < 0)
+    // S-P1 `_RYNX_CROWN_VOLUME` v2 (tex0_bv < 0 = not present).
+    int   crown_vol_tex0_bv   = -1;
+    int   crown_vol_tex1_bv   = -1;
+    int   crown_vol_dims[3]   = { 0, 0, 0 };
+    float crown_vol_box_min[3] = { 0.0f, 0.0f, 0.0f };
+    float crown_vol_box_max[3] = { 0.0f, 0.0f, 0.0f };
+    float crown_vol_cell_m    = 0.0f;
+    float crown_vol_rho_cap   = 0.0f;
+    float crown_vol_clumping  = 1.05f;
 };
 
 // C6 P4 — forward-only material JSON emitter. Replaces the pop_back() hack
@@ -379,7 +404,8 @@ inline std::string build_json_multi_mesh(
     const std::vector<int>* image_bv_indices = nullptr,
     bool any_translucency = false,
     bool any_collision = false,
-    bool any_bone = false)
+    bool any_bone = false,
+    bool any_crown_volume = false)
 {
     std::string j;
     j.reserve(4096 + meshes_meta.size() * 256);
@@ -442,7 +468,7 @@ inline std::string build_json_multi_mesh(
 
     // extensionsUsed — emit when any extension is in use.
     const bool has_textures = (image_count > 0);
-    if (any_wind || any_lod || any_translucency || any_collision || any_bone) {
+    if (any_wind || any_lod || any_translucency || any_collision || any_bone || any_crown_volume) {
         j += R"(,"extensionsUsed":[)";
         bool first = true;
         auto ext = [&](const char* name) {
@@ -452,6 +478,7 @@ inline std::string build_json_multi_mesh(
         };
         if (any_bone)         ext("_RYNX_BONE");
         if (any_collision)    ext("_RYNX_COLLISION");
+        if (any_crown_volume) ext("_RYNX_CROWN_VOLUME");
         if (any_translucency) ext("_RYNX_LEAF_TRANSLUCENCY");
         if (any_lod)          ext("_RYNX_LOD");
         if (any_wind)         ext("_RYNX_WIND");
@@ -569,11 +596,12 @@ inline std::string build_json_multi_mesh(
             j += '}';
         }
         j += ']';
-        // Per-mesh extensions (_RYNX_BONE, _RYNX_COLLISION, _RYNX_LOD).
+        // Per-mesh extensions (_RYNX_BONE, _RYNX_COLLISION, _RYNX_CROWN_VOLUME, _RYNX_LOD).
         const bool has_lod  = (mm.lod_index >= 0);
         const bool has_col  = (mm.collision_half_length >= 0.0f);
         const bool has_bone = (mm.bone_table_bv >= 0 && mm.bone_count > 0);
-        if (has_col || has_lod || has_bone) {
+        const bool has_cvol = (mm.crown_vol_tex0_bv >= 0 && mm.crown_vol_tex1_bv >= 0);
+        if (has_col || has_lod || has_bone || has_cvol) {
             j += R"(,"extensions":{)";
             bool first_ext = true;
             if (has_bone) {
@@ -592,6 +620,33 @@ inline std::string build_json_multi_mesh(
                 j += f2s(mm.collision_half_length);
                 j += R"(,"radius":)";
                 j += f2s(mm.collision_radius);
+                j += '}';
+                first_ext = false;
+            }
+            if (has_cvol) {
+                if (!first_ext) j += ',';
+                j += R"("_RYNX_CROWN_VOLUME":{"version":2,"format":"f2_tensor_unorm_snorm","dims":[)";
+                j += i2s(mm.crown_vol_dims[0]); j += ',';
+                j += i2s(mm.crown_vol_dims[1]); j += ',';
+                j += i2s(mm.crown_vol_dims[2]);
+                j += R"(],"box_min":[)";
+                j += f2s(mm.crown_vol_box_min[0]); j += ',';
+                j += f2s(mm.crown_vol_box_min[1]); j += ',';
+                j += f2s(mm.crown_vol_box_min[2]);
+                j += R"(],"box_max":[)";
+                j += f2s(mm.crown_vol_box_max[0]); j += ',';
+                j += f2s(mm.crown_vol_box_max[1]); j += ',';
+                j += f2s(mm.crown_vol_box_max[2]);
+                j += R"(],"cell_m":)";
+                j += f2s(mm.crown_vol_cell_m);
+                j += R"(,"rho_cap":)";
+                j += f2s(mm.crown_vol_rho_cap);
+                j += R"(,"clumping":)";
+                j += f2s(mm.crown_vol_clumping);
+                j += R"(,"tex0_buffer_view":)";
+                j += i2s(mm.crown_vol_tex0_bv);
+                j += R"(,"tex1_buffer_view":)";
+                j += i2s(mm.crown_vol_tex1_bv);
                 j += '}';
                 first_ext = false;
             }
@@ -969,10 +1024,11 @@ inline bool build_glb_multi_mesh(std::span<const MeshData> meshes,
     std::vector<glb_detail::MeshJsonMeta> meshes_meta;
     meshes_meta.reserve(meshes.size());
 
-    bool any_wind      = false;
-    bool any_lod       = false;
-    bool any_collision = false;
-    bool any_bone      = false;
+    bool any_wind         = false;
+    bool any_lod          = false;
+    bool any_collision    = false;
+    bool any_bone         = false;
+    bool any_crown_volume = false;
     for (const auto& mm : meshes) {
         glb_detail::MeshJsonMeta meta;
         meta.first_prim = static_cast<int>(resolved.size());
@@ -992,6 +1048,38 @@ inline bool build_glb_multi_mesh(std::span<const MeshData> meshes,
             }
             meta.bone_count = static_cast<int>(mm.bone_count);
             any_bone = true;
+        }
+        // S-P1 _RYNX_CROWN_VOLUME validation (bufferViews filled during BIN layout).
+        if (mm.crown_volume.present()) {
+            const auto& cv = mm.crown_volume;
+            for (int a = 0; a < 3; ++a) {
+                if (cv.dims[a] < 2 || cv.dims[a] > 128) {
+                    set_err("write_glb_multi_mesh: crown_volume dims must be in [2, 128]");
+                    return false;
+                }
+                if (!(cv.box_max[a] > cv.box_min[a])) {
+                    set_err("write_glb_multi_mesh: crown_volume box_max must exceed box_min");
+                    return false;
+                }
+            }
+            if (!(cv.cell_m > 0.0f) || !(cv.rho_cap > 0.0f) || !(cv.clumping > 0.0f)) {
+                set_err("write_glb_multi_mesh: crown_volume cell_m/rho_cap/clumping must be > 0");
+                return false;
+            }
+            const size_t expected_bytes = size_t(cv.dims[0]) * size_t(cv.dims[1]) * size_t(cv.dims[2]) * 4u;
+            if (cv.tex0.size() != expected_bytes || cv.tex1.size() != expected_bytes) {
+                set_err("write_glb_multi_mesh: crown_volume tex0/tex1 byteLength mismatch");
+                return false;
+            }
+            for (int a = 0; a < 3; ++a) {
+                meta.crown_vol_dims[a]    = cv.dims[a];
+                meta.crown_vol_box_min[a] = cv.box_min[a];
+                meta.crown_vol_box_max[a] = cv.box_max[a];
+            }
+            meta.crown_vol_cell_m   = cv.cell_m;
+            meta.crown_vol_rho_cap  = cv.rho_cap;
+            meta.crown_vol_clumping = cv.clumping;
+            any_crown_volume = true;
         }
         meshes_meta.push_back(meta);
 
@@ -1241,6 +1329,18 @@ inline bool build_glb_multi_mesh(std::span<const MeshData> meshes,
         meshes_meta[mi].bone_table_bv = bt_bv;
     }
 
+    // S-P1 — append per-mesh _RYNX_CROWN_VOLUME tex0 (UNORM) and tex1 (SNORM) bufferViews.
+    for (size_t mi = 0; mi < meshes.size(); ++mi) {
+        const auto& mm = meshes[mi];
+        if (!mm.crown_volume.present()) continue;
+        int t0_bv = add_bv(static_cast<int>(mm.crown_volume.tex0.size()), 0);
+        glb_detail::append_bytes(bin, mm.crown_volume.tex0.data(), mm.crown_volume.tex0.size());
+        int t1_bv = add_bv(static_cast<int>(mm.crown_volume.tex1.size()), 0);
+        glb_detail::append_bytes(bin, mm.crown_volume.tex1.data(), mm.crown_volume.tex1.size());
+        meshes_meta[mi].crown_vol_tex0_bv = t0_bv;
+        meshes_meta[mi].crown_vol_tex1_bv = t1_bv;
+    }
+
     // C6 P4 — append image bufferViews (target=0, 4-byte aligned).
     std::vector<int> image_bv_indices;
     bool any_translucency = false;
@@ -1265,7 +1365,8 @@ inline bool build_glb_multi_mesh(std::span<const MeshData> meshes,
         images.empty() ? nullptr : &image_bv_indices,
         any_translucency,
         any_collision,
-        any_bone);
+        any_bone,
+        any_crown_volume);
 
     size_t json_pad = glb_detail::align_up(json.size()) - json.size();
     json.append(json_pad, ' ');

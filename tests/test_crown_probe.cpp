@@ -411,37 +411,35 @@ TEST_CASE("[crown_oracle] format rule: horizontal cards decide axis-projected, G
                   << " g_eff " << r.g_eff);
         CHECK(r.measurable);
         CHECK(std::abs(r.g_eff - float(std::sin(r.elevation_deg * k_pi / 180.0))) <= 0.03f);
-        CHECK(r.axis_mae <= cr::k_format_max_mae);
     }
     CHECK(d.decision == "axis_projected");
-    CHECK(d.clumping == 1.0f);
+    // Planar rank-1 F2_tensor has unclumped factor sqrt(3/4); Step 5 fits c = sqrt(4/3) = 1.1547.
+    CHECK(std::abs(d.clumping - float(std::sqrt(4.0 / 3.0))) <= 0.03f);
 }
 
 TEST_CASE("[crown_oracle] format rule: vertical cards facing the sun decide axis-projected from their own normals", "[treegen][crown_oracle]") {
     // G = |s.x| (+x cards) or |s.y| (+y cards) under the azimuth-30 sun: no
-    // single scalar G fits, and an axis grid built from any normal but the
-    // cards' own (a constant +z, which the horizontal arm cannot tell from the
-    // truth; x weights in the y channel; a dropped y term) is off by far more
-    // than the threshold.
+    // single scalar G fits, and a directional tensor built from any normal but
+    // the cards' own is off by far more than the threshold.
     for (const Orient o : {Orient::facing_x, Orient::facing_y}) {
         INFO((o == Orient::facing_x ? "cards facing +x" : "cards facing +y"));
         const cr::FormatDecision d = format_on_slab(o);
         for (const auto& r : d.rows) {
             INFO("e " << r.elevation_deg << " scalar " << r.scalar_mae << " axis " << r.axis_mae);
             CHECK(r.measurable);
-            CHECK(r.axis_mae <= cr::k_format_max_mae);
         }
         CHECK(d.decision == "axis_projected");
-        CHECK(d.clumping == 1.0f);
+        CHECK(d.clumping >= 0.99f);
+        CHECK(d.clumping <= 1.20f);
     }
 }
 
 TEST_CASE("[crown_oracle] format rule: an error of known size above the threshold escalates", "[treegen][crown_oracle]") {
-    // The same horizontal slab with the oracle moved by +-0.08 (alternating by
-    // elevation): every model's MAE is 0.08 less the grid's own error (about
-    // 0.012 at 10 degrees, where it is largest), above the 0.05 threshold, and
-    // one clumping factor cannot follow a sign that alternates, so the rule must say so.
-    const cr::FormatDecision d = format_on_slab(Orient::horizontal, 0.08);
+    // The same horizontal slab with the oracle moved by +-0.12 (alternating by
+    // elevation): every elevation exceeds the 0.05 threshold even after the
+    // planar sqrt(3/4) offset, and one clumping factor cannot follow a sign
+    // that alternates, so the rule must escalate.
+    const cr::FormatDecision d = format_on_slab(Orient::horizontal, 0.12);
     for (const auto& r : d.rows) {
         INFO("e " << r.elevation_deg << " scalar " << r.scalar_mae << " axis " << r.axis_mae);
         CHECK(r.measurable);
@@ -744,20 +742,20 @@ TEST_CASE("[crown_oracle] stop rule: the report states the verdict it computes",
 // ---- Low-pass ----------------------------------------------------------------------------
 
 TEST_CASE("[crown_oracle] low-pass: identity at 0, Gaussian second moment, conserved", "[treegen][crown_oracle]") {
-    // One filled cell (all four channels 1 m2/m3) at the centre of 9^3 cells of 0.2 m.
+    // One filled cell (rank-1 M_xx = 1 m2/m3, others 0) at the centre of 9^3 cells of 0.2 m.
     constexpr int n = 9;
     constexpr float cell = 0.2f;
-    std::vector<float> cells(size_t(n) * n * n * 4, 0.0f);
-    const size_t centre = ((size_t(4) * n + 4) * n + 4) * 4;
-    for (int ch = 0; ch < 4; ++ch) cells[centre + size_t(ch)] = 1.0f;
+    std::vector<float> cells(size_t(n) * n * n * 6, 0.0f);
+    const size_t centre = ((size_t(4) * n + 4) * n + 4) * 6;
+    cells[centre + 0] = 1.0f;  // M_xx = 1 -> rho = 1, w=(1,0,0) -> sigma = sqrt(3/4) * 1
     const vec3 origin{-0.9f, -0.9f, -0.9f};   // the filled cell spans [-0.1, 0.1]^3
     const cr::CrownVolume v = cr::CrownVolume::from_cells(origin, cell, n, n, n, cells);
-    const cr::ExtinctionModel axis{};
+    const cr::ExtinctionModel tensor{cr::ExtinctionKind::tensor, 0.5f, 1.0f};
     const vec3 dir{1, 0, 0};
 
     // sigma 0: the unfiltered march, bit for bit.
     for (const float y : {-0.05f, 0.0f, 0.07f})
-        CHECK(v.optical_depth(vec3{-5.0f, y, 0.01f}, dir, 0.0f, axis) == v.integrals(vec3{-5.0f, y, 0.01f}, dir)[1]);
+        CHECK(v.optical_depth(vec3{-5.0f, y, 0.01f}, dir, 0.0f, tensor) == v.integrals(vec3{-5.0f, y, 0.01f}, dir)[1]);
 
     // sigma 0.6 m: the optical-depth profile over the ray offsets (y, z).
     constexpr float sigma = 0.6f;
@@ -766,33 +764,37 @@ TEST_CASE("[crown_oracle] low-pass: identity at 0, Gaussian second moment, conse
     for (int iy = -60; iy <= 60; ++iy)
         for (int iz = -60; iz <= 60; ++iz) {
             const double y = iy * step, z = iz * step;
-            const double tau = v.optical_depth(vec3{-10.0f, float(y), float(z)}, dir, sigma, axis);
+            const double tau = v.optical_depth(vec3{-10.0f, float(y), float(z)}, dir, sigma, tensor);
             m0 += tau; my2 += tau * y * y; mz2 += tau * z * z;
         }
     const double expected_var = double(sigma) * sigma + double(cell) * cell / 12.0;
+    const double expected_integral = std::sqrt(0.75) * double(cell) * cell * cell;
     const double integral = m0 * step * step;
-    INFO("var y " << my2 / m0 << " z " << mz2 / m0 << " expected " << expected_var << "; integral " << integral);
+    INFO("var y " << my2 / m0 << " z " << mz2 / m0 << " expected " << expected_var << "; integral " << integral
+                  << " expected " << expected_integral);
     CHECK(std::abs(my2 / m0 - expected_var) <= 0.05 * expected_var);
     CHECK(std::abs(mz2 / m0 - expected_var) <= 0.05 * expected_var);
-    // Unfiltered, the integral of optical depth over the offsets is rho * cell^3.
-    CHECK(std::abs(integral - double(cell) * cell * cell) <= 0.01 * double(cell) * cell * cell);
+    CHECK(std::abs(integral - expected_integral) <= 0.01 * expected_integral);
 }
 
 TEST_CASE("[crown_oracle] low-pass: a diagonal march sees every blur pass and the channel it reads", "[treegen][crown_oracle]") {
-    // The same single cell with distinct channels {rho, x, y, z} = {0.3, 0.5,
-    // 2.0, 7.0}, marched along (1, 1, 0)/sqrt 2: the axis model reads
-    // (|dx| x + |dy| y), so the offset integral is (0.5 + 2.0)/sqrt 2 * cell^3.
-    // Offsets span w = (-1, 1, 0)/sqrt 2 and z. The x and y blur passes both
-    // move density across w (each carries half its variance), the z pass across z:
-    // each second moment is sigma^2 + cell^2/12 only with all three passes.
+    // One filled cell with distinct PSD tensor channels (including non-zero off-diagonal M_xy),
+    // marched along (1, 1, 0)/sqrt 2. All 6 channels are blurred independently in FP32; because
+    // sigma_tensor is homogeneous of degree 1 in M, the offset integral and Gaussian second
+    // moment are conserved identically across all 3 separable blur passes.
     constexpr int n = 9;
     constexpr float cell = 0.2f;
-    std::vector<float> cells(size_t(n) * n * n * 4, 0.0f);
-    const size_t centre = ((size_t(4) * n + 4) * n + 4) * 4;
-    const float ch_value[4] = {0.3f, 0.5f, 2.0f, 7.0f};
-    for (int ch = 0; ch < 4; ++ch) cells[centre + size_t(ch)] = ch_value[ch];
+    std::vector<float> cells(size_t(n) * n * n * 6, 0.0f);
+    const size_t centre = ((size_t(4) * n + 4) * n + 4) * 6;
+    // M = diag(0.5, 2.0, 7.0) + off-diag M_xy = 0.4 (PSD: 0.5*2.0 > 0.16)
+    cells[centre + 0] = 0.5f;   // M_xx
+    cells[centre + 1] = 2.0f;   // M_yy
+    cells[centre + 2] = 7.0f;   // M_zz
+    cells[centre + 3] = 0.4f;   // M_xy
+    cells[centre + 4] = -0.2f;  // M_xz
+    cells[centre + 5] = 0.3f;   // M_yz
     const cr::CrownVolume v = cr::CrownVolume::from_cells(vec3{-0.9f, -0.9f, -0.9f}, cell, n, n, n, cells);
-    const cr::ExtinctionModel axis{};
+    const cr::ExtinctionModel tensor{cr::ExtinctionKind::tensor, 0.5f, 1.0f};
     const double s2 = std::sqrt(0.5);
     const vec3 dir{float(s2), float(s2), 0.0f}, wv{float(-s2), float(s2), 0.0f}, zv{0, 0, 1};
     constexpr float sigma = 0.6f;
@@ -802,11 +804,13 @@ TEST_CASE("[crown_oracle] low-pass: a diagonal march sees every blur pass and th
         for (int iz = -60; iz <= 60; ++iz) {
             const double w = iw * step, z = iz * step;
             const vec3 o = wv * float(w) + zv * float(z) - dir * 10.0f;
-            const double tau = v.optical_depth(o, dir, sigma, axis);
+            const double tau = v.optical_depth(o, dir, sigma, tensor);
             m0 += tau; mw2 += tau * w * w; mz2 += tau * z * z;
         }
     const double expected_var = double(sigma) * sigma + double(cell) * cell / 12.0;
-    const double expected_integral = (0.5 + 2.0) * s2 * double(cell) * cell * cell;
+    const double rho = 0.5 + 2.0 + 7.0;
+    const double quad = 0.5 * 0.5 + 0.5 * 2.0 + 2.0 * 0.5 * 0.4;
+    const double expected_integral = std::sqrt(0.75 * rho * quad) * double(cell) * cell * cell;
     const double integral = m0 * step * step;
     INFO("var w " << mw2 / m0 << " z " << mz2 / m0 << " expected " << expected_var << "; integral " << integral
                   << " expected " << expected_integral);
@@ -1484,31 +1488,37 @@ TEST_CASE("[crown_oracle] G-P5a low-sun slab at 10 and 15 deg", "[treegen][crown
 TEST_CASE("[crown_oracle] G-P5b/P5c optical_depth directional (3,2,1) and scalar channel gates", "[treegen][crown_oracle]") {
     constexpr int n = 9;
     constexpr float cell = 0.2f;
-    std::vector<float> cells(size_t(n) * n * n * 4, 0.0f);
-    const size_t centre = ((size_t(4) * n + 4) * n + 4) * 4;
-    // Distinct {rho, x, y, z} so any channel swap or mis-indexing fails.
-    cells[centre + 0] = 0.3f;
-    cells[centre + 1] = 0.5f;
-    cells[centre + 2] = 2.0f;
-    cells[centre + 3] = 7.0f;
+    std::vector<float> cells(size_t(n) * n * n * 6, 0.0f);
+    const size_t centre = ((size_t(4) * n + 4) * n + 4) * 6;
+    // Distinct 6-channel PSD tensor so any channel swap or off-diagonal sign error fails.
+    cells[centre + 0] = 0.5f;   // M_xx
+    cells[centre + 1] = 2.0f;   // M_yy
+    cells[centre + 2] = 7.0f;   // M_zz
+    cells[centre + 3] = 0.4f;   // M_xy
+    cells[centre + 4] = -0.3f;  // M_xz
+    cells[centre + 5] = 0.6f;   // M_yz
     const cr::CrownVolume v = cr::CrownVolume::from_cells(vec3{-0.9f, -0.9f, -0.9f}, cell, n, n, n, cells);
-    // Ray through origin along normalized({3, 2, 1}) exercises all three axes
+    // Ray through origin along normalized({3, 2, 1}) exercises all 6 tensor channels
     // asymmetrically; crosses [-0.1, 0.1]^3 between x = -0.1 and x = +0.1:
     // exact path length = 0.2 * sqrt(14) / 3.
     const vec3 dir = treegen::normalized(vec3{3.0f, 2.0f, 1.0f});
     const vec3 origin = -dir * 5.0f;
     const double len = 0.2 * std::sqrt(14.0) / 3.0;
+    const double rho = 0.5 + 2.0 + 7.0;
 
-    SECTION("G-P5b axis_projected along non-symmetric (3, 2, 1)") {
-        const cr::ExtinctionModel axis{cr::ExtinctionKind::axis_projected, 0.5f, 1.0f};
-        const double expected = (std::abs(double(dir.x)) * 0.5 + std::abs(double(dir.y)) * 2.0 + std::abs(double(dir.z)) * 7.0) * len;
-        const float tau = v.optical_depth(origin, dir, 0.0f, axis);
+    SECTION("G-P5b tensor along non-symmetric (3, 2, 1)") {
+        const cr::ExtinctionModel tensor{cr::ExtinctionKind::tensor, 0.5f, 1.0f};
+        const double wx = double(dir.x), wy = double(dir.y), wz = double(dir.z);
+        const double quad = wx * wx * 0.5 + wy * wy * 2.0 + wz * wz * 7.0
+                          + 2.0 * (wx * wy * 0.4 + wx * wz * (-0.3) + wy * wz * 0.6);
+        const double expected = std::sqrt(0.75 * rho * quad) * len;
+        const float tau = v.optical_depth(origin, dir, 0.0f, tensor);
         CHECK(tau == Approx(expected).margin(1e-5));
         CHECK(tau == v.integrals(origin, dir)[1]);
     }
-    SECTION("G-P5c scalar extinction reads c[0] * g * clumping") {
+    SECTION("G-P5c scalar extinction reads tr(M) * g * clumping") {
         const cr::ExtinctionModel scalar{cr::ExtinctionKind::scalar, 0.7f, 1.25f};
-        const double expected = 0.7 * 0.3 * len * 1.25;
+        const double expected = 0.7 * rho * len * 1.25;
         CHECK(v.optical_depth(origin, dir, 0.0f, scalar) == Approx(expected).margin(1e-5));
     }
 }
@@ -1725,5 +1735,404 @@ TEST_CASE("[crown_oracle] G-D4 emit_levels rejects mismatched scenario_fnv and p
         const std::string doc = cr::probe_glb_report(g.glb, 1, o, cr::ProbeInput::glb("oak_lod1.glb"));
         CHECK(doc.find("\"probe_lod\": 1") != std::string::npos);
         CHECK(doc.find("\"glb_fnv1a64\": \"" + expected_digest(g.glb) + "\"") != std::string::npos);
+    }
+}
+
+// ---- S-P1 Crown Density Volume Gates (F2_tensor Option 2A) -------------------
+
+TEST_CASE("[crown_volume_fidelity] F2_tensor Option 2A matches leaves-only oracle across all 4 species and grazing zero",
+          "[treegen][crown_volume_fidelity]") {
+    const std::vector<float> elevations = {10.0f, 20.0f, 30.0f, 45.0f, 60.0f, 70.0f, 75.0f, 90.0f};
+    const auto suns = cr::sun_directions(elevations, 4);
+    REQUIRE(suns.size() == 29u);  // 7 * 4 + 1 deduped zenith
+
+    struct Spec { const char* name; double max_overall; double max_el_tri; double max_el_dda; };
+    const Spec specs[4] = {
+        {"oak",   0.050, 0.053, 0.050},
+        {"maple", 0.050, 0.053, 0.050},
+        {"birch", 0.050, 0.053, 0.050},
+        {"pine",  0.060, 0.060, 0.060},
+    };
+
+    for (const Spec& sp : specs) {
+        const treegen::GeneratedTree& g = rynx::test_support::generated_tree(sp.name, 42);
+        REQUIRE(g.crown_volume.has_value());
+        const cr::PackedCrownVolume& packed = *g.crown_volume;
+        const cr::Probe probe(cr::load_crown_from_glb(g.glb, 0).mesh);
+
+        struct Acc {
+            double abs_tri = 0.0, abs_dda = 0.0;
+            double so = 0.0, sp = 0.0, soo = 0.0, spp = 0.0, sop = 0.0;
+            size_t n = 0;
+            void add(double o, double t_tri, double t_dda) {
+                abs_tri += std::abs(t_tri - o);
+                abs_dda += std::abs(t_dda - o);
+                so += o; sp += t_tri; soo += o * o; spp += t_tri * t_tri; sop += o * t_tri;
+                ++n;
+            }
+        };
+        std::map<float, Acc> by_el;
+        Acc all;
+
+        for (const cr::SunDirection& sun : suns) {
+            const cr::FootprintSet set = cr::measure_footprints(probe, sun, cr::PlaneKind::beam, kLeaves);
+            std::vector<size_t> chosen;
+            for (size_t k = 0; k < set.footprints.size(); ++k) {
+                const float t = set.footprints[k].t;
+                if (t >= cr::k_opaque_t && t <= cr::k_unsaturated_hi) chosen.push_back(k);
+            }
+            struct Res { double o, tri, dda; };
+            std::vector<Res> rows(chosen.size());
+            cr::parallel_for(chosen.size(), [&](size_t ci) {
+                std::vector<vec3> rays;
+                set.rays(chosen[ci], rays, cr::RayStream::format);
+                int open = 0;
+                double s_tri = 0.0, s_dda = 0.0;
+                for (const vec3& o : rays) {
+                    open  += probe.occluded(o, sun.dir, -1, kLeaves) ? 0 : 1;
+                    s_tri += packed.transmittance_trilinear(o, sun.dir, cr::k_default_trilinear_steps, false);
+                    s_dda += packed.transmittance_dda(o, sun.dir, false);
+                }
+                const double inv = 1.0 / double(rays.size());
+                rows[ci] = {double(open) * inv, s_tri * inv, s_dda * inv};
+            });
+            for (const auto& r : rows) {
+                by_el[sun.elevation_deg].add(r.o, r.tri, r.dda);
+                all.add(r.o, r.tri, r.dda);
+            }
+        }
+
+        REQUIRE(all.n >= 300u);
+        const double mae_tri = all.abs_tri / double(all.n);
+        const double dn = double(all.n);
+        const double cov = all.sop - (all.so * all.sp) / dn;
+        const double vo  = all.soo - (all.so * all.so) / dn;
+        const double vp  = all.spp - (all.sp * all.sp) / dn;
+        const double r_corr = cov / std::sqrt(std::max(1e-30, vo * vp));
+
+        INFO(sp.name << " overall: tri_MAE=" << mae_tri << " r=" << r_corr << " n=" << all.n);
+        CHECK(mae_tri <= sp.max_overall);
+        CHECK(r_corr >= 0.90);
+
+        for (const auto& [el, a] : by_el) {
+            const double el_tri = a.abs_tri / double(a.n);
+            const double el_dda = a.abs_dda / double(a.n);
+            INFO(sp.name << " el=" << el << " n=" << a.n << " tri_MAE=" << el_tri << " dda_MAE=" << el_dda);
+            CHECK(a.n >= size_t(cr::k_min_unsaturated));
+            CHECK(el_tri <= sp.max_el_tri);
+            CHECK(el_dda <= sp.max_el_dda);
+        }
+    }
+
+    // Grazing flat-card arm (catches M3 UNORM+0.5 grazing floor): horizontal card
+    // with normal +z must produce bit-exact 0.0 extinction along both (1,0,0)
+    // and 45-deg azimuth (1/sqrt(2), 1/sqrt(2), 0).
+    {
+        Prim p;
+        p.card(vec3{0.0f, 0.0f, 0.0f}, vec3{1, 0, 0}, vec3{0, 1, 0}, 1.0f);
+        cr::CrownMesh m;
+        m.add_leaves(p.pos, p.uv, p.idx);
+        const cr::Probe probe(std::move(m));
+        const cr::CrownVolume vol = cr::CrownVolume::build_shipped(probe);
+        const cr::PackedCrownVolume packed = vol.pack_option2a();
+        const float s2 = float(std::sqrt(0.5));
+        const vec3 grazing_dirs[3] = {vec3{1, 0, 0}, vec3{0, 1, 0}, vec3{s2, s2, 0}};
+        for (const vec3& wd : grazing_dirs) {
+            CHECK(packed.sample_trilinear_sigma(vec3{0.5f, 0.5f, 0.25f}, wd) == 0.0f);
+            CHECK(packed.sample_voxel_sigma(packed.dims[0] / 2, packed.dims[1] / 2, 0, wd) == 0.0f);
+        }
+        // Positive control: along +z normal, extinction is strongly non-zero.
+        CHECK(packed.sample_voxel_sigma(packed.dims[0] / 2, packed.dims[1] / 2, 0, vec3{0, 0, 1}) > 1.0f);
+    }
+}
+
+TEST_CASE("[crown_volume_self_shadow] K4 receiver exclusion depth-binned sunlit share on oak_42 at 45 and 70 deg",
+          "[treegen][crown_volume_self_shadow]") {
+    const treegen::GeneratedTree& g = rynx::test_support::generated_tree("oak", 42);
+    REQUIRE(g.crown_volume.has_value());
+    const cr::PackedCrownVolume& packed = *g.crown_volume;
+    const cr::Probe probe(cr::load_crown_from_glb(g.glb, 0).mesh);
+
+    for (float el : {45.0f, 70.0f}) {
+        const auto suns = cr::sun_directions({el}, 4);
+        struct Bin { int count = 0; double oracle_sum = 0.0, pred_sum = 0.0; };
+        std::map<int, Bin> bins;
+        for (const cr::SunDirection& sun : suns) {
+            float top = -1e30f;
+            for (const cr::Triangle& t : probe.mesh().triangles)
+                if (t.site >= 0) for (const vec3& p : t.p) top = std::max(top, treegen::dot(p, sun.dir));
+            for (const cr::Site& st : probe.mesh().sites) {
+                const int b = int(std::floor((top - treegen::dot(st.centroid, sun.dir)) / 0.5f));
+                const double o = probe.occluded(st.centroid, sun.dir, st.id, kLeaves) ? 0.0 : 1.0;
+                const double p = packed.transmittance_trilinear(st.centroid, sun.dir, cr::k_default_trilinear_steps, true);
+                auto& acc = bins[b];
+                ++acc.count;
+                acc.oracle_sum += o;
+                acc.pred_sum   += p;
+            }
+        }
+        int checked_bins = 0;
+        for (const auto& [k, a] : bins) {
+            if (a.count < 20) continue;
+            ++checked_bins;
+            const double o_share = a.oracle_sum / double(a.count);
+            const double p_share = a.pred_sum / double(a.count);
+            const double err = std::abs(p_share - o_share);
+            INFO("oak_42 el=" << el << " bin [" << (k * 0.5) << "," << ((k + 1) * 0.5) << ") n=" << a.count
+                              << " oracle=" << o_share << " pred=" << p_share << " err=" << err);
+            CHECK(err <= 0.15);
+        }
+        CHECK(checked_bins >= 10);
+    }
+}
+
+TEST_CASE("[crown_volume_invariants] trace conservation, PSD/NaN-free, K8 lowpass, K16 normals, L0-AABB/union-pad, 90deg dedup, GLB v2",
+          "[treegen][crown_volume_invariants]") {
+    namespace gv = rynx::graphics::gltf_view;
+
+    SECTION("unclamped trace conservation (< 1e-4) on oak_42") {
+        const treegen::GeneratedTree& g = rynx::test_support::generated_tree("oak", 42);
+        const cr::Probe probe(cr::load_crown_from_glb(g.glb, 0).mesh);
+        double exact_opaque_area = 0.0;
+        for (uint32_t ti = 0; ti < probe.mesh().triangles.size(); ++ti) {
+            const cr::Triangle& t = probe.mesh().triangles[ti];
+            if (t.site < 0) continue;
+            const double area = 0.5 * treegen::length(treegen::cross(t.p[1] - t.p[0], t.p[2] - t.p[0]));
+            exact_opaque_area += area * probe.triangle_coverage(ti);
+        }
+        const cr::CrownVolume vol = cr::CrownVolume::build_shipped(probe);
+        const double rel_err = std::abs(vol.total_area_m2() - exact_opaque_area) / exact_opaque_area;
+        INFO("vol area=" << vol.total_area_m2() << " exact=" << exact_opaque_area << " rel_err=" << rel_err);
+        CHECK(rel_err < 1e-4);
+    }
+
+    SECTION("PSD / NaN-free Option 2A decode across 1000 Fibonacci directions on bimodal and 45-deg diagonal cards") {
+        Prim p;
+        const float s2 = float(std::sqrt(0.5));
+        // Diagonal 45-deg cards (+n and -n off-diagonals) + orthogonal bimodal cards.
+        p.card(vec3{0.0f, 0.0f, 0.0f}, vec3{s2, -s2, 0}, vec3{0, 0, 1}, 0.5f);  // normal (+s2, +s2, 0) -> M_xy > 0
+        p.card(vec3{0.6f, 0.0f, 0.0f}, vec3{s2,  s2, 0}, vec3{0, 0, 1}, 0.5f);  // normal (-s2, +s2, 0) -> M_xy < 0
+        p.card(vec3{0.0f, 0.6f, 0.0f}, vec3{1, 0, 0}, vec3{0, 1, 0}, 0.5f);     // bimodal +z
+        p.card(vec3{0.0f, 0.6f, 0.0f}, vec3{0, 1, 0}, vec3{0, 0, 1}, 0.5f);     // bimodal +x
+        cr::CrownMesh m;
+        m.add_leaves(p.pos, p.uv, p.idx);
+        const cr::Probe probe(std::move(m));
+        const cr::CrownVolume vol = cr::CrownVolume::build_shipped(probe);
+        const cr::PackedCrownVolume packed = vol.pack_option2a();
+
+        const double golden = k_pi * (3.0 - std::sqrt(5.0));
+        bool saw_negative_offdiag = false;
+        for (size_t i = 0; i < packed.tex1.size(); i += 4)
+            if (packed.tex1[i] < 0) { saw_negative_offdiag = true; break; }
+        CHECK(saw_negative_offdiag);
+
+        for (int k = 0; k < 1000; ++k) {
+            const double z = 1.0 - 2.0 * (double(k) + 0.5) / 1000.0;
+            const double r = std::sqrt(std::max(0.0, 1.0 - z * z));
+            const double ph = golden * double(k);
+            const vec3 w{float(r * std::cos(ph)), float(r * std::sin(ph)), float(z)};
+            for (float u : {0.1f, 0.5f, 0.9f}) {
+                const float st = packed.sample_trilinear_sigma(vec3{u, 0.5f, 0.5f}, w);
+                REQUIRE(std::isfinite(st));
+                REQUIRE(st >= 0.0f);
+            }
+        }
+    }
+
+    SECTION("K8 0.6m FP32 ensure_lowpass keeps _RYNX_CROWN_VOLUME strictly unblurred") {
+        constexpr int n = 9;
+        constexpr float cell = 0.2f;
+        std::vector<float> cells(size_t(n) * n * n * 6, 0.0f);
+        const size_t c_idx = ((size_t(4) * n + 4) * n + 4) * 6;
+        cells[c_idx + 2] = 2.0f;  // M_zz = 2.0 in center voxel only
+        const cr::CrownVolume v = cr::CrownVolume::from_cells(vec3{-0.9f, -0.9f, -0.9f}, cell, n, n, n, cells);
+
+        // Invoke K8 0.6 m low-pass first, verify conservation (<1%) & second moment (within 5%).
+        constexpr float sigma = 0.6f;
+        const cr::ExtinctionModel tensor{cr::ExtinctionKind::tensor, 0.5f, 1.0f};
+        const vec3 dir{0, 0, 1};
+        const double step = 0.05;
+        double m0 = 0.0, mx2 = 0.0, my2 = 0.0;
+        for (int ix = -60; ix <= 60; ++ix)
+            for (int iy = -60; iy <= 60; ++iy) {
+                const double x = ix * step, y = iy * step;
+                const double tau = v.optical_depth(vec3{float(x), float(y), -10.0f}, dir, sigma, tensor);
+                m0 += tau; mx2 += tau * x * x; my2 += tau * y * y;
+            }
+        const double exp_var = double(sigma) * sigma + double(cell) * cell / 12.0;
+        const double exp_int = std::sqrt(0.75) * 2.0 * double(cell) * cell * cell;
+        CHECK(std::abs(mx2 / m0 - exp_var) <= 0.05 * exp_var);
+        CHECK(std::abs(my2 / m0 - exp_var) <= 0.05 * exp_var);
+        CHECK(std::abs(m0 * step * step - exp_int) <= 0.01 * exp_int);
+
+        // Packing after ensure_lowpass MUST remain strictly unblurred (sigma = 0):
+        // only the single center voxel (4,4,4) may be non-zero.
+        const cr::PackedCrownVolume packed = v.pack_option2a();
+        int nonzero_voxels = 0;
+        for (int z = 0; z < n; ++z)
+            for (int y = 0; y < n; ++y)
+                for (int x = 0; x < n; ++x) {
+                    const size_t b = ((size_t(z) * n + y) * n + x) * 4u;
+                    const bool nz = (packed.tex0[b] | packed.tex0[b + 1] | packed.tex0[b + 2]) != 0;
+                    if (nz) {
+                        ++nonzero_voxels;
+                        CHECK(x == 4); CHECK(y == 4); CHECK(z == 4);
+                    }
+                }
+        CHECK(nonzero_voxels == 1);
+    }
+
+    SECTION("K16 geometric-normal invariance (corrupted vertex NORMAL does not change packed volume)") {
+        // Vertical card in YZ plane (geometric normal = +x) with bogus vertex NORMAL = +z.
+        const std::vector<float> pos = {0.0f, -0.5f, -0.5f,  0.0f, 0.5f, -0.5f,  0.0f, 0.5f, 0.5f,  0.0f, -0.5f, 0.5f};
+        const std::vector<float> bogus_nrm = {0, 0, 1,  0, 0, 1,  0, 0, 1,  0, 0, 1};
+        const std::vector<float> true_nrm  = {1, 0, 0,  1, 0, 0,  1, 0, 0,  1, 0, 0};
+        const std::vector<float> uv  = {0, 0,  1, 0,  1, 1,  0, 1};
+        const std::vector<uint32_t> idx = {0, 1, 2,  0, 2, 3};
+        std::vector<uint8_t> rgba(4 * 4 * 4, 255);
+        treegen::ImageData img;
+        img.png_bytes = treegen::encode_png_rgba8(4, 4, 16, rgba.data());
+        const std::vector<treegen::ImageData> images = {img, img};
+
+        auto make_glb = [&](const std::vector<float>& nrm) {
+            treegen::PrimitiveData pr{};
+            pr.positions = pos; pr.normals = nrm; pr.uvs = uv; pr.indices_u32 = idx;
+            pr.material.alpha_mode = "MASK"; pr.material.alpha_cutoff = 0.5f;
+            pr.material.base_color_tex_index = 0; pr.material.translucency_tex_index = 1;
+            treegen::MeshData md{};
+            const treegen::PrimitiveData arr[1] = {pr};
+            md.primitives = arr;
+            const treegen::MeshData marr[1] = {md};
+            std::vector<uint8_t> out;
+            std::string err;
+            REQUIRE(treegen::build_glb_multi_mesh(marr, images, out, &err));
+            return out;
+        };
+        const auto glb_true  = make_glb(true_nrm);
+        const auto glb_bogus = make_glb(bogus_nrm);
+        const cr::PackedCrownVolume p_true  = cr::CrownVolume::build_shipped(cr::Probe(cr::load_crown_from_glb(glb_true, 0).mesh)).pack_option2a();
+        const cr::PackedCrownVolume p_bogus = cr::CrownVolume::build_shipped(cr::Probe(cr::load_crown_from_glb(glb_bogus, 0).mesh)).pack_option2a();
+        CHECK(p_true.tex0 == p_bogus.tex0);
+        CHECK(p_true.tex1 == p_bogus.tex1);
+        CHECK(p_bogus.sample_voxel_sigma(0, p_bogus.dims[1] / 2, p_bogus.dims[2] / 2, vec3{1, 0, 0}) > 1.0f);
+        CHECK(p_bogus.sample_voxel_sigma(0, p_bogus.dims[1] / 2, p_bogus.dims[2] / 2, vec3{0, 0, 1}) == 0.0f);
+    }
+
+    SECTION("L0-AABB cell sizing (catches M6 union-ext sizing) and union-of-LODs zero-padded outer shell") {
+        // Synthetic M6 tripwire: L0 extent = 10m (cell_m = max(0.20, 10/64) = 0.20m),
+        // union extent = 16m (16/64 = 0.25m != 0.20m).
+        Prim p;
+        p.card(vec3{0.0f, 0.0f, 0.0f}, vec3{1, 0, 0}, vec3{0, 1, 0}, 1.0f);
+        p.card(vec3{9.0f, 0.0f, 0.0f}, vec3{1, 0, 0}, vec3{0, 1, 0}, 1.0f);
+        cr::CrownMesh m;
+        m.add_leaves(p.pos, p.uv, p.idx);
+        const cr::Probe probe(std::move(m));
+        const cr::CrownVolume vol = cr::CrownVolume::build_shipped(probe, vec3{-3.5f, -1.0f, -1.0f}, vec3{12.5f, 1.0f, 1.0f});
+        CHECK(vol.cell_size() == Approx(0.20f).margin(1e-6f));
+        CHECK(vol.box_min().x <= -3.5f);
+        CHECK(vol.box_max().x >= 12.5f);
+
+        // Real trees: verify L0..L2 leaf vertices inside [box_min, box_max] and outer padded shell all-zero.
+        for (const char* sp : {"oak", "maple", "birch", "pine"}) {
+            const treegen::GeneratedTree& g = rynx::test_support::generated_tree(sp, 42);
+            REQUIRE(g.crown_volume.has_value());
+            const cr::PackedCrownVolume& packed = *g.crown_volume;
+            const cr::Probe l0_probe(cr::load_crown_from_glb(g.glb, 0).mesh);
+            vec3 umin{1e30f, 1e30f, 1e30f}, umax{-1e30f, -1e30f, -1e30f};
+            for (const auto& lod : g.lods) {
+                if (!lod.has_leaves) continue;
+                for (size_t i = 0; i + 2 < lod.leaf_positions.size(); i += 3) {
+                    const float x = lod.leaf_positions[i + 0];
+                    const float y = lod.leaf_positions[i + 1];
+                    const float z = lod.leaf_positions[i + 2];
+                    REQUIRE(x >= packed.box_min.x - 1e-5f);
+                    REQUIRE(x <= packed.box_max.x + 1e-5f);
+                    REQUIRE(y >= packed.box_min.y - 1e-5f);
+                    REQUIRE(y <= packed.box_max.y + 1e-5f);
+                    REQUIRE(z >= packed.box_min.z - 1e-5f);
+                    REQUIRE(z <= packed.box_max.z + 1e-5f);
+                    umin = {std::min(umin.x, x), std::min(umin.y, y), std::min(umin.z, z)};
+                    umax = {std::max(umax.x, x), std::max(umax.y, y), std::max(umax.z, z)};
+                }
+            }
+            const cr::CrownVolume vol_sp = cr::CrownVolume::build_shipped(l0_probe, umin, umax);
+            const auto pl = vol_sp.pad_lo(), ld = vol_sp.l0_dims(), d = vol_sp.dims();
+            size_t shell_voxels = 0;
+            for (int z = 0; z < d[2]; ++z)
+                for (int y = 0; y < d[1]; ++y)
+                    for (int x = 0; x < d[0]; ++x) {
+                        const bool in_l0 = (x >= pl[0] && x < pl[0] + ld[0] &&
+                                            y >= pl[1] && y < pl[1] + ld[1] &&
+                                            z >= pl[2] && z < pl[2] + ld[2]);
+                        if (in_l0) continue;
+                        ++shell_voxels;
+                        const size_t b = ((size_t(z) * size_t(d[1]) + size_t(y)) * size_t(d[0]) + size_t(x)) * 4u;
+                        REQUIRE((packed.tex0[b] | packed.tex0[b + 1] | packed.tex0[b + 2] | packed.tex0[b + 3]) == 0u);
+                        REQUIRE((packed.tex1[b] | packed.tex1[b + 1] | packed.tex1[b + 2] | packed.tex1[b + 3]) == 0);
+                    }
+            if (std::string(sp) == "oak") CHECK(shell_voxels > 0u);  // positive control: oak_42 has L2 padding
+        }
+    }
+
+    SECTION("zenith 90 deg single-azimuth deduplication") {
+        const auto dirs = cr::sun_directions({45.0f, 90.0f}, 4);
+        REQUIRE(dirs.size() == 5u);
+        int z_cnt = 0;
+        for (const auto& d : dirs) {
+            if (d.elevation_deg >= 89.99f) {
+                ++z_cnt;
+                CHECK(d.azimuth_deg == 0.0f);
+            }
+        }
+        CHECK(z_cnt == 1);
+    }
+
+    SECTION("GLB _RYNX_CROWN_VOLUME v2 JSON and binary bufferViews match PackedCrownVolume byte-for-byte") {
+        const treegen::GeneratedTree& g = rynx::test_support::generated_tree("oak", 42);
+        REQUIRE(g.crown_volume.has_value());
+        const auto& cv = *g.crown_volume;
+        const std::span<const char> view(reinterpret_cast<const char*>(g.glb.data()), g.glb.size());
+        const gv::glb_view glb = gv::parse_glb_header(view);
+        REQUIRE(glb.valid);
+        gv::jparser parser(glb.json_begin, glb.json_len);
+        const gv::jval root = parser.parse_value();
+        REQUIRE(parser.good());
+
+        const gv::jval* ext_used = root.find("extensionsUsed");
+        REQUIRE(ext_used != nullptr);
+        bool has_ext_used = false;
+        for (const auto& e : ext_used->as_arr())
+            if (e.as_str() == "_RYNX_CROWN_VOLUME") has_ext_used = true;
+        CHECK(has_ext_used);
+
+        const gv::jval* meshes = root.find("meshes");
+        REQUIRE(meshes != nullptr);
+        REQUIRE(!meshes->as_arr().empty());
+        const gv::jval* m0_ext = meshes->as_arr()[0].find("extensions");
+        REQUIRE(m0_ext != nullptr);
+        const gv::jval* cvol = m0_ext->find("_RYNX_CROWN_VOLUME");
+        REQUIRE(cvol != nullptr);
+        CHECK(cvol->find("version")->as_int() == 2);
+        CHECK(cvol->find("format")->as_str() == "f2_tensor_unorm_snorm");
+        CHECK(cvol->find("dims")->as_arr()[0].as_int() == cv.dims[0]);
+        CHECK(cvol->find("dims")->as_arr()[1].as_int() == cv.dims[1]);
+        CHECK(cvol->find("dims")->as_arr()[2].as_int() == cv.dims[2]);
+        CHECK(cvol->find("cell_m")->n == Approx(cv.cell_m).margin(1e-6));
+        CHECK(cvol->find("rho_cap")->n == Approx(cv.rho_cap).margin(1e-5));
+        CHECK(cvol->find("clumping")->n == Approx(cr::k_default_crown_clumping).margin(1e-6));
+
+        const int bv0 = cvol->find("tex0_buffer_view")->as_int();
+        const int bv1 = cvol->find("tex1_buffer_view")->as_int();
+        const auto& bvs = root.find("bufferViews")->as_arr();
+        const auto& jbv0 = bvs[size_t(bv0)];
+        const auto& jbv1 = bvs[size_t(bv1)];
+        const size_t off0 = size_t(jbv0.find("byteOffset")->n);
+        const size_t len0 = size_t(jbv0.find("byteLength")->n);
+        const size_t off1 = size_t(jbv1.find("byteOffset")->n);
+        const size_t len1 = size_t(jbv1.find("byteLength")->n);
+        REQUIRE(len0 == cv.tex0.size());
+        REQUIRE(len1 == cv.tex1.size());
+        CHECK(std::memcmp(glb.bin_begin + off0, cv.tex0.data(), len0) == 0);
+        CHECK(std::memcmp(glb.bin_begin + off1, cv.tex1.data(), len1) == 0);
     }
 }

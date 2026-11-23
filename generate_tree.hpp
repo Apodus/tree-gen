@@ -10,12 +10,14 @@
 #pragma once
 
 #include "collision_fit.hpp"
+#include "crown_volume.hpp"
 #include "glb_writer.hpp"
 #include "lod_emitter.hpp"
 #include "scenario.hpp"
 #include "skeleton.hpp"
 
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 namespace treegen {
@@ -32,8 +34,9 @@ struct TreeLevels : GrownTree {
 };
 
 struct GeneratedTree : TreeLevels {
-    std::vector<ImageData> images;    // GLB image order: bark 0-3, leaf 4-7 when leafy
-    std::vector<uint8_t>   glb;       // what --out writes, byte for byte
+    std::vector<ImageData>                  images;        // GLB image order: bark 0-3, leaf 4-7 when leafy
+    std::optional<crown::PackedCrownVolume> crown_volume;  // S-P1 F2_tensor Option 2A (present iff leafy)
+    std::vector<uint8_t>                    glb;           // what --out writes, byte for byte
 };
 
 // `scenario.kind` must be "tree" (throws std::runtime_error otherwise).

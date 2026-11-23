@@ -309,8 +309,12 @@ SunDirection sun_direction(float elevation_deg, float azimuth_deg) {
 
 std::vector<SunDirection> sun_directions(const std::vector<float>& elevations_deg, int azimuths) {
     std::vector<SunDirection> out;
-    for (float e : elevations_deg)
-        for (int k = 0; k < azimuths; ++k) out.push_back(sun_direction(e, 360.0f * float(k) / float(azimuths)));
+    for (float e : elevations_deg) {
+        // Deduplicate zenith (elevation >= 89.99 deg) to a single azimuth (0 deg)
+        // so zenith footprints are never 4x weighted (Carbon Note #1 / S-P1 §2.3.4).
+        const int n_az = (e >= 89.99f) ? 1 : azimuths;
+        for (int k = 0; k < n_az; ++k) out.push_back(sun_direction(e, 360.0f * float(k) / float(n_az)));
+    }
     return out;
 }
 

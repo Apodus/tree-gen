@@ -81,7 +81,10 @@ std::vector<LeafSite> generate_leaf_sites(const TreeSkeleton& skel,
             const vec3  radial_dir = normalized(u * c + v * s);
 
             const float interp_radius = parent.radius + (child.radius - parent.radius) * t;
-            const float lateral = std::max(0.005f, interp_radius) + opts.leaf_size_m * 0.5f;
+            // Twig-straddling placement: hug the real 3D branch instead of floating 0.5*s off
+            // (0.28*s keeps the twig strictly inside the sprig's ~0.43*s opaque core while
+            // fanning alternating lateral shoots naturally across adjacent 0.20m voxels).
+            const float lateral = std::max(0.005f, interp_radius) + opts.leaf_size_m * 0.28f;
             const vec3 p = parent.position + seg * t + radial_dir * lateral;
 
             LeafSite ls;

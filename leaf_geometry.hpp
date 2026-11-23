@@ -62,6 +62,13 @@ inline constexpr int K_TRIS_PER_LEAF_SINGLE_CARD  = 2;
 inline constexpr int K_VERTS_PER_BENT_CARD = 6;
 inline constexpr int K_TRIS_PER_BENT_CARD  = 4;
 
+// ClusterCard (3 x 4-vert Volumetric Sprig Bouquet): centered 4-vert quad per
+// card (2 tris). With cluster_count_per_tip = 3, emits 12 verts / 6 tris per
+// site: exact G1b <= 12 verts/host and 0.0 mm K17 centroid agreement.
+inline constexpr int   K_VERTS_PER_SPRIG_CARD     = 4;
+inline constexpr int   K_TRIS_PER_SPRIG_CARD      = 2;
+inline constexpr float K_MAX_SPRIG_CONE_TILT_RAD  = 0.7330382858376184f;  // 42 deg hard cap (TRAP 4)
+
 // BranchStrip: one quad per branch segment. 4 verts, 2 tris. Emission is
 // per-segment (build_branch_strip_mesh), not per-site (build_leaf_mesh).
 inline constexpr int K_VERTS_PER_STRIP = 4;

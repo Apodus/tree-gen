@@ -752,49 +752,169 @@ TEST_CASE("treegen_leaf_geometry: tris_per_leaf SoT matches emitter output",
     }
 }
 
-TEST_CASE("treegen_leaf_geometry: ClusterCard emits 6 verts / 4 tris, UVs in cluster cell",
+TEST_CASE("treegen_leaf_geometry: ClusterCard emits 3x4-vert sprig bouquet with 0mm centroid, U-mirror TBN, and <=42 deg tilt",
           "[treegen][treegen_leaf_geometry][treegen_leaf_geom_cluster_card]") {
     const auto sites = make_synthetic_sites();
     treegen::LeafMeshOptions opts;
-    opts.geometry_type   = treegen::LeafGeometryType::ClusterCard;
-    opts.shape           = treegen::LeafShape::OakLobed;
-    opts.leaf_size_m     = 0.12f;
-    opts.bend_half_angle = 0.392699081698724f;
+    opts.geometry_type         = treegen::LeafGeometryType::ClusterCard;
+    opts.shape                 = treegen::LeafShape::OakLobed;
+    opts.leaf_size_m           = 0.40f;
+    opts.cluster_count_per_tip = 3;
+    opts.bend_half_angle       = 0.6632251f;  // 38 deg cone tilt
 
     auto out = treegen::build_leaf_mesh(sites, opts);
 
-    // Geometry: one bent card per site (6 verts / 4 tris).
-    REQUIRE(out.positions.size() / 3 == sites.size() * 6);
-    REQUIRE(out.indices.size()       == sites.size() * 12);
-    REQUIRE(out.uvs.size()       / 2 == sites.size() * 6);
-    REQUIRE(out.material_slots.size() == sites.size() * 6);
+    // Geometry: 3 centered 4-vert quads per site (12 verts / 6 tris).
+    REQUIRE(out.positions.size() / 3 == sites.size() * 12);
+    REQUIRE(out.indices.size()       == sites.size() * 18);
+    REQUIRE(out.uvs.size()       / 2 == sites.size() * 12);
+    REQUIRE(out.material_slots.size() == sites.size() * 12);
+    REQUIRE(out.tangents.size()  / 4 == sites.size() * 12);
 
-    // SoT count helpers agree.
+    // SoT count helpers agree (G1b <= 12 verts/host at N=3).
     REQUIRE(treegen::verts_per_leaf(treegen::LeafGeometryType::ClusterCard,
-                                    treegen::LeafShape::OakLobed, 1) == 6);
+                                    treegen::LeafShape::OakLobed, 3) == 12);
     REQUIRE(treegen::tris_per_leaf (treegen::LeafGeometryType::ClusterCard,
+                                    treegen::LeafShape::OakLobed, 3) == 6);
+    REQUIRE(treegen::verts_per_leaf(treegen::LeafGeometryType::ClusterCard,
                                     treegen::LeafShape::OakLobed, 1) == 4);
+    REQUIRE(treegen::tris_per_leaf (treegen::LeafGeometryType::ClusterCard,
+                                    treegen::LeafShape::OakLobed, 1) == 2);
 
-    // Every UV lands inside the oak CLUSTER cell (row 2) usable rect — proving
-    // the card samples the multi-leaf cell, not the single-leaf cell (row 0).
     constexpr float cell_size_uv = 1.0f / static_cast<float>(treegen::K_LEAF_ATLAS_DIM);
     constexpr float pad_uv       = static_cast<float>(treegen::K_LEAF_CELL_PAD_PX)
                                  / static_cast<float>(treegen::K_LEAF_ATLAS_PX);
     constexpr float usable_uv    = cell_size_uv - 2.0f * pad_uv;
     const float u0 = static_cast<float>(treegen::leaf_cluster_cell_col(treegen::LeafShape::OakLobed))
                      * cell_size_uv + pad_uv;
-    const float v0 = static_cast<float>(treegen::K_LEAF_CLUSTER_CELL_ROW) * cell_size_uv + pad_uv;
-    const float u1 = u0 + usable_uv, v1 = v0 + usable_uv;
-    REQUIRE(v0 > 0.5f);   // row 2 → V in the lower half (not the row-0 leaf cell)
-    for (size_t i = 0; i < out.uvs.size() / 2; ++i) {
-        const float u = out.uvs[i * 2 + 0];
-        const float v = out.uvs[i * 2 + 1];
-        INFO("uv=(" << u << "," << v << ") rect u[" << u0 << "," << u1 << "] v[" << v0 << "," << v1 << "]");
-        REQUIRE(u >= u0 - 1e-6f);
-        REQUIRE(u <= u1 + 1e-6f);
-        REQUIRE(v >= v0 - 1e-6f);
-        REQUIRE(v <= v1 + 1e-6f);
+    const float u1 = u0 + usable_uv;
+
+    const float min_dot_outward = std::cos(treegen::K_MAX_SPRIG_CONE_TILT_RAD) - 1e-4f;
+    int mirrored_cards = 0;
+    int unmirrored_cards = 0;
+
+    for (size_t si = 0; si < sites.size(); ++si) {
+        const treegen::vec3 site_n = treegen::normalized(sites[si].normal);
+        treegen::vec3 card_centroids[3]{};
+        treegen::vec3 card_normals[3]{};
+        bool saw_row[4] = {false, false, false, false};
+
+        for (int k = 0; k < 3; ++k) {
+            const size_t base = si * 12 + static_cast<size_t>(k) * 4;
+
+            // Centroid of 4-vert quad.
+            treegen::vec3 c{0.0f, 0.0f, 0.0f};
+            for (int v = 0; v < 4; ++v) {
+                c.x += out.positions[(base + v) * 3 + 0];
+                c.y += out.positions[(base + v) * 3 + 1];
+                c.z += out.positions[(base + v) * 3 + 2];
+            }
+            card_centroids[k] = treegen::vec3{c.x * 0.25f, c.y * 0.25f, c.z * 0.25f};
+
+            // Bit-identical normal across all 4 vertices of card k (rigid wind hash!).
+            const treegen::vec3 n0{out.normals[base * 3 + 0], out.normals[base * 3 + 1], out.normals[base * 3 + 2]};
+            card_normals[k] = n0;
+            REQUIRE(std::abs(vlen(n0) - 1.0f) < 1e-4f);
+            REQUIRE(treegen::dot(n0, site_n) >= min_dot_outward);
+            for (int v = 1; v < 4; ++v) {
+                REQUIRE(out.normals[(base + v) * 3 + 0] == n0.x);
+                REQUIRE(out.normals[(base + v) * 3 + 1] == n0.y);
+                REQUIRE(out.normals[(base + v) * 3 + 2] == n0.z);
+            }
+
+            // UVs land inside one of the 3 sprig rows {1, 2, 3}.
+            const float v_first = out.uvs[base * 2 + 1];
+            const int row = static_cast<int>(v_first / cell_size_uv);
+            REQUIRE(row >= treegen::K_LEAF_SPRIG_ROW_MIN);
+            REQUIRE(row <= treegen::K_LEAF_SPRIG_ROW_MAX);
+            saw_row[row] = true;
+            const float v0 = static_cast<float>(row) * cell_size_uv + pad_uv;
+            const float v1 = v0 + usable_uv;
+            for (int v = 0; v < 4; ++v) {
+                const float u = out.uvs[(base + v) * 2 + 0];
+                const float vv = out.uvs[(base + v) * 2 + 1];
+                REQUIRE(u >= u0 - 1e-6f);
+                REQUIRE(u <= u1 + 1e-6f);
+                REQUIRE(vv >= v0 - 1e-6f);
+                REQUIRE(vv <= v1 + 1e-6f);
+            }
+
+            // TRAP 3: Exact tangent handedness on BOTH mirrored and unmirrored cards.
+            // Corner 0 = (-right, -forward), Corner 1 = (+right, -forward), Corner 3 = (-right, +forward).
+            const treegen::vec3 p0{out.positions[(base + 0) * 3 + 0], out.positions[(base + 0) * 3 + 1], out.positions[(base + 0) * 3 + 2]};
+            const treegen::vec3 p1{out.positions[(base + 1) * 3 + 0], out.positions[(base + 1) * 3 + 1], out.positions[(base + 1) * 3 + 2]};
+            const treegen::vec3 p3{out.positions[(base + 3) * 3 + 0], out.positions[(base + 3) * 3 + 1], out.positions[(base + 3) * 3 + 2]};
+            const float du01 = out.uvs[(base + 1) * 2 + 0] - out.uvs[(base + 0) * 2 + 0];
+            const float dv03 = out.uvs[(base + 3) * 2 + 1] - out.uvs[(base + 0) * 2 + 1];
+            REQUIRE(dv03 < 0.0f); // V-flip: corner 3 (+forward) has smaller V
+            const treegen::vec3 dP_dU = treegen::normalized((p1 - p0) * (du01 > 0.0f ? 1.0f : -1.0f));
+            const treegen::vec3 dP_neg_dV = treegen::normalized(p3 - p0);
+
+            const treegen::vec3 T{out.tangents[base * 4 + 0], out.tangents[base * 4 + 1], out.tangents[base * 4 + 2]};
+            const float tw = out.tangents[base * 4 + 3];
+            const treegen::vec3 B = treegen::cross(n0, T) * tw;
+            REQUIRE(treegen::dot(T, dP_dU) > 0.999f);
+            REQUIRE(treegen::dot(B, dP_neg_dV) > 0.999f);
+            if (du01 < 0.0f) { REQUIRE(tw == -1.0f); ++mirrored_cards; }
+            else             { REQUIRE(tw == +1.0f); ++unmirrored_cards; }
+        }
+
+        // All 3 sprig variants present on every 3-card site.
+        REQUIRE(saw_row[1]);
+        REQUIRE(saw_row[2]);
+        REQUIRE(saw_row[3]);
+
+        // Exact 0.0 mm K17 centroid agreement across all 3 cards (<< 1.0 mm merge threshold).
+        for (int k = 1; k < 3; ++k) {
+            const float d = vlen(card_centroids[k] - card_centroids[0]);
+            REQUIRE(d < 1e-5f);
+        }
+
+        // Sibling cards have genuinely distinct normals (decorrelated lighting & wind).
+        REQUIRE(treegen::dot(card_normals[0], card_normals[1]) < 0.90f);
+        REQUIRE(treegen::dot(card_normals[1], card_normals[2]) < 0.90f);
+        REQUIRE(treegen::dot(card_normals[2], card_normals[0]) < 0.90f);
     }
+
+    // Hard cone tilt cap <= 42 deg enforced even if caller requests larger tilt.
+    opts.bend_half_angle = 1.3f;  // ~74 deg -> must clamp to 42 deg
+    auto out_clamped = treegen::build_leaf_mesh(sites, opts);
+    for (size_t i = 0; i < out_clamped.normals.size() / 3; ++i) {
+        const treegen::vec3 n{out_clamped.normals[i * 3 + 0], out_clamped.normals[i * 3 + 1], out_clamped.normals[i * 3 + 2]};
+        const treegen::vec3 sn = treegen::normalized(sites[i / 12].normal);
+        REQUIRE(treegen::dot(n, sn) >= min_dot_outward);
+    }
+
+    // 3D Isotropy check (G3a >= 0.35): projected area min/max across full sphere.
+    std::vector<treegen::LeafSite> one_site = {sites[0]};
+    opts.bend_half_angle = 0.6632251f; // 38 deg
+    opts.leaf_size_m = 1.0f;
+    auto out_iso = treegen::build_leaf_mesh(one_site, opts);
+    auto get_v = [&](uint32_t i) -> treegen::vec3 {
+        return {out_iso.positions[i * 3 + 0], out_iso.positions[i * 3 + 1], out_iso.positions[i * 3 + 2]};
+    };
+    float min_proj = 1e9f, max_proj = 0.0f;
+    constexpr int k_dirs = 200;
+    constexpr float k_gr = 1.6180339887498949f;
+    constexpr float k_pi = 3.14159265358979323846f;
+    for (int i = 0; i < k_dirs; ++i) {
+        const float th = std::acos(1.0f - 2.0f * (static_cast<float>(i) + 0.5f) / static_cast<float>(k_dirs));
+        const float ph = 2.0f * k_pi * static_cast<float>(i) / k_gr;
+        const treegen::vec3 vd{std::sin(th) * std::cos(ph), std::sin(th) * std::sin(ph), std::cos(th)};
+        float proj = 0.0f;
+        for (size_t t = 0; t < out_iso.indices.size(); t += 3) {
+            const auto a = get_v(out_iso.indices[t + 0]);
+            const auto b = get_v(out_iso.indices[t + 1]);
+            const auto c = get_v(out_iso.indices[t + 2]);
+            proj += std::abs(treegen::dot(treegen::cross(b - a, c - a), vd)) * 0.5f;
+        }
+        min_proj = std::min(min_proj, proj);
+        max_proj = std::max(max_proj, proj);
+    }
+    const float isotropy = min_proj / max_proj;
+    INFO("sprig bouquet 3D isotropy min/max=" << isotropy << " (min=" << min_proj << " max=" << max_proj << ")");
+    // Beats tree-budget G3a isotropy floor (>= 0.35) even with 38 deg phototropic cone tilt cap.
+    REQUIRE(isotropy >= 0.35f);
 }
 
 TEST_CASE("treegen_leaf_geometry: strip angular separation is pi/N",

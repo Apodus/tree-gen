@@ -843,8 +843,8 @@ namespace treegen {
             // - Maple: shorter petiole offset so cordate bases fill the shoot core (~0.30-0.36 fill)
             float sp_scale = 1.0f;
             float petiole_frac = 0.54f;
-            if (sp == LeafShape::BirchSerrated) { sp_scale = 0.94f; petiole_frac = 0.48f; }
-            else if (sp == LeafShape::MapleStar) { sp_scale = 1.04f; petiole_frac = 0.40f; }
+            if (sp == LeafShape::BirchSerrated) { sp_scale = 1.09f; petiole_frac = 0.46f; }
+            else if (sp == LeafShape::MapleStar) { sp_scale = 0.84f; petiole_frac = 0.48f; }
 
             pcg32 rng;
             constexpr uint64_t k_stream_sprig = 0xB0'7A'01'5E'EDULL;
@@ -905,47 +905,47 @@ namespace treegen {
             };
 
             if (sp == LeafShape::BirchSerrated) {
-                // Lush arching silver-birch shoots with alternating serrated leaflet clusters.
+                // Lush arching silver-birch shoots spanning ~[20, 236] with organic center fill
+                // (no artificial hollow ring) and zero corner bleed.
                 if (variant_row == 1) {
-                    add_subcluster(3, vec2{120.0f, 158.0f}, 172.0f, 3, 106.0f, 38.0f, 45.0f, 0.14f, 23.0f);
-                    add_subcluster(1, vec2{ 98.0f, 122.0f},  74.0f, 3, 114.0f, 40.0f, 47.0f, 0.30f, 26.0f);
-                    add_subcluster(2, vec2{156.0f, 124.0f}, -74.0f, 3, 114.0f, 40.0f, 47.0f, 0.36f, 26.0f);
-                    add_subcluster(0, vec2{128.0f,  94.0f},  -6.0f, 3, 108.0f, 35.0f, 42.0f, 0.80f, 21.0f);
+                    add_subcluster(3, vec2{122.0f, 166.0f}, 172.0f, 3, 124.0f, 42.0f, 50.0f, 0.14f, 23.0f);
+                    add_subcluster(1, vec2{ 94.0f, 122.0f},  74.0f, 3, 126.0f, 45.0f, 53.0f, 0.30f, 26.0f);
+                    add_subcluster(2, vec2{164.0f, 126.0f}, -74.0f, 3, 126.0f, 45.0f, 53.0f, 0.36f, 26.0f);
+                    add_subcluster(0, vec2{128.0f,  92.0f},  -6.0f, 3, 122.0f, 40.0f, 48.0f, 0.80f, 21.0f);
                 } else if (variant_row == 2) {
-                    add_subcluster(3, vec2{112.0f, 160.0f}, 160.0f, 3, 104.0f, 38.0f, 45.0f, 0.16f, 24.0f);
-                    add_subcluster(2, vec2{150.0f, 136.0f}, -80.0f, 3, 110.0f, 40.0f, 47.0f, 0.28f, 26.0f);
-                    add_subcluster(1, vec2{102.0f, 106.0f},  68.0f, 3, 110.0f, 40.0f, 47.0f, 0.44f, 25.0f);
-                    add_subcluster(0, vec2{140.0f,  88.0f}, -18.0f, 3,  96.0f, 35.0f, 42.0f, 0.82f, 22.0f);
+                    add_subcluster(3, vec2{110.0f, 168.0f}, 162.0f, 3, 118.0f, 43.0f, 50.0f, 0.16f, 24.0f);
+                    add_subcluster(2, vec2{158.0f, 138.0f}, -82.0f, 3, 124.0f, 45.0f, 53.0f, 0.28f, 26.0f);
+                    add_subcluster(1, vec2{ 96.0f, 108.0f},  68.0f, 3, 124.0f, 45.0f, 53.0f, 0.44f, 25.0f);
+                    add_subcluster(0, vec2{142.0f,  84.0f}, -18.0f, 3, 112.0f, 40.0f, 48.0f, 0.82f, 22.0f);
                 } else {
-                    add_subcluster(2, vec2{112.0f, 158.0f}, 162.0f, 3, 104.0f, 38.0f, 45.0f, 0.18f, 24.0f);
-                    add_subcluster(1, vec2{152.0f, 124.0f}, -72.0f, 3, 108.0f, 39.0f, 46.0f, 0.40f, 26.0f);
-                    add_subcluster(0, vec2{104.0f,  94.0f},  34.0f, 3, 104.0f, 36.0f, 43.0f, 0.78f, 22.0f);
+                    add_subcluster(2, vec2{112.0f, 170.0f}, 164.0f, 3, 114.0f, 42.0f, 50.0f, 0.18f, 24.0f);
+                    add_subcluster(1, vec2{166.0f, 126.0f}, -72.0f, 3, 118.0f, 44.0f, 52.0f, 0.40f, 26.0f);
+                    add_subcluster(0, vec2{ 96.0f,  86.0f},  32.0f, 3, 114.0f, 41.0f, 49.0f, 0.78f, 22.0f);
                 }
             } else if (variant_row == 1) {
-                // Var A: Lush forked terminal fan shoot (11-12 leaves in 4 overlapping sub-clusters).
-                add_subcluster(3, vec2{124.0f, 156.0f}, 178.0f, 2,  84.0f, 42.0f, 49.0f, 0.12f, 23.0f);
-                add_subcluster(1, vec2{ 98.0f, 122.0f},  74.0f, 3, 112.0f, 44.0f, 52.0f, 0.28f, 26.0f);
-                add_subcluster(2, vec2{158.0f, 124.0f}, -72.0f, 3, 112.0f, 44.0f, 52.0f, 0.34f, 26.0f);
-                add_subcluster(0, vec2{128.0f,  98.0f},  -4.0f, 3, 108.0f, 38.0f, 46.0f, 0.78f, 21.0f);
+                // Var A: Lush forked terminal fan shoot spanning ~[20, 236] with natural core foliage.
+                add_subcluster(3, vec2{122.0f, 162.0f}, 174.0f, 3, 116.0f, 46.0f, 54.0f, 0.12f, 23.0f);
+                add_subcluster(1, vec2{ 96.0f, 122.0f},  74.0f, 3, 124.0f, 48.0f, 56.0f, 0.28f, 26.0f);
+                add_subcluster(2, vec2{162.0f, 124.0f}, -72.0f, 3, 124.0f, 48.0f, 56.0f, 0.34f, 26.0f);
+                add_subcluster(0, vec2{128.0f,  94.0f},  -4.0f, 3, 120.0f, 43.0f, 51.0f, 0.78f, 21.0f);
             } else if (variant_row == 2) {
                 // Var B (default cluster row): Curved alternating (oak) or opposite decussate (maple).
                 if (sp == LeafShape::MapleStar) {
-                    add_subcluster(3, vec2{124.0f, 158.0f}, 172.0f, 2,  90.0f, 42.0f, 48.0f, 0.14f, 24.0f);
-                    add_subcluster(1, vec2{102.0f, 120.0f},  78.0f, 3, 108.0f, 44.0f, 52.0f, 0.32f, 26.0f);
-                    add_subcluster(2, vec2{154.0f, 122.0f}, -76.0f, 3, 108.0f, 44.0f, 52.0f, 0.32f, 26.0f);
-                    add_subcluster(0, vec2{128.0f,  98.0f},   6.0f, 3, 100.0f, 38.0f, 46.0f, 0.74f, 22.0f);
+                    add_subcluster(3, vec2{120.0f, 164.0f}, 168.0f, 3, 116.0f, 46.0f, 54.0f, 0.14f, 24.0f);
+                    add_subcluster(1, vec2{ 96.0f, 120.0f},  78.0f, 3, 122.0f, 48.0f, 56.0f, 0.32f, 26.0f);
+                    add_subcluster(2, vec2{160.0f, 126.0f}, -76.0f, 3, 122.0f, 48.0f, 56.0f, 0.32f, 26.0f);
+                    add_subcluster(0, vec2{130.0f,  92.0f},   6.0f, 3, 116.0f, 43.0f, 51.0f, 0.74f, 22.0f);
                 } else {
-                    add_subcluster(3, vec2{112.0f, 162.0f}, 162.0f, 2,  82.0f, 42.0f, 49.0f, 0.15f, 23.0f);
-                    add_subcluster(2, vec2{152.0f, 138.0f}, -80.0f, 3, 106.0f, 44.0f, 52.0f, 0.26f, 26.0f);
-                    add_subcluster(1, vec2{102.0f, 106.0f},  68.0f, 3, 106.0f, 44.0f, 52.0f, 0.42f, 25.0f);
-                    add_subcluster(0, vec2{142.0f,  90.0f}, -18.0f, 2,  82.0f, 38.0f, 45.0f, 0.80f, 21.0f);
+                    add_subcluster(3, vec2{110.0f, 168.0f}, 162.0f, 3, 112.0f, 46.0f, 54.0f, 0.15f, 23.0f);
+                    add_subcluster(2, vec2{158.0f, 138.0f}, -80.0f, 3, 118.0f, 48.0f, 56.0f, 0.26f, 26.0f);
+                    add_subcluster(1, vec2{ 96.0f, 106.0f},  68.0f, 3, 118.0f, 48.0f, 56.0f, 0.42f, 25.0f);
+                    add_subcluster(0, vec2{144.0f,  86.0f}, -18.0f, 2,  96.0f, 43.0f, 51.0f, 0.80f, 21.0f);
                 }
             } else {
-                // Var C (Row 3): Open dappled twiglet (8 leaves in 3 organic sub-clusters)
-                // with natural interior sky pockets for sub-card sunflecks.
-                add_subcluster(2, vec2{114.0f, 158.0f}, 164.0f, 2,  86.0f, 42.0f, 48.0f, 0.18f, 24.0f);
-                add_subcluster(1, vec2{154.0f, 124.0f}, -72.0f, 3, 104.0f, 42.0f, 50.0f, 0.38f, 26.0f);
-                add_subcluster(0, vec2{104.0f,  96.0f},  34.0f, 3, 102.0f, 39.0f, 46.0f, 0.76f, 22.0f);
+                // Var C (Row 3): Open dappled twiglet spanning ~[22, 234] with sky pockets.
+                add_subcluster(2, vec2{112.0f, 168.0f}, 164.0f, 2,  98.0f, 46.0f, 54.0f, 0.18f, 24.0f);
+                add_subcluster(1, vec2{164.0f, 124.0f}, -72.0f, 3, 114.0f, 46.0f, 54.0f, 0.38f, 26.0f);
+                add_subcluster(0, vec2{ 96.0f,  88.0f},  34.0f, 3, 112.0f, 43.0f, 51.0f, 0.76f, 22.0f);
             }
 
             // Stamp thick petiole stubs first (underneath leaf bases), then leaves back-to-front.

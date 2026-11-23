@@ -31,13 +31,14 @@ struct GlbRow {
     uint64_t    fnv1a64;  // det_rng.hpp fnv1a64 over the GLB bytes
 };
 
-// S-P1 regenerated table (includes _RYNX_CROWN_VOLUME v2 F2_tensor Option 2A,
-// clumping = 1.05, L0-AABB cell_m = max(0.20, longest/64) + union-of-LODs pad).
+// Botanical Leaf Sprigs & 3D Cluster Uplift regenerated table (16-cell 1024^2
+// botanical sprig atlas, 3x4-vert sprig bouquets, twig-straddling placement,
+// alpha-localized F2_tensor Option 2A crown volume, clumping = 0.887 / 1.05).
 constexpr std::array<GlbRow, 4> k_glb_table = {{
-    {"oak",   42, 5540740, 0x7662f20765224e0cull},
-    {"maple", 42, 6362904, 0xb276cd81467f9a7aull},
-    {"birch", 42, 5571216, 0xaf62562131aed617ull},
-    {"pine",  42, 4247540, 0x7a929c7e92cb82e4ull},
+    {"oak",   42, 6948024, 0x50168b409aeca32aull},
+    {"maple", 42, 7828868, 0x6b425f4bd7d60b5aull},
+    {"birch", 42, 6920496, 0x182404e4719e2ee9ull},
+    {"pine",  42, 5800124, 0xabcfeb9603f74f88ull},
 }};
 
 uint64_t glb_fnv(const std::vector<uint8_t>& b) {

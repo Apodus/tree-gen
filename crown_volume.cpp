@@ -70,9 +70,42 @@ void splat_leaves(const Probe& probe, vec3 origin, float cell, int nx, int ny, i
                                          length(t.p[0] - t.p[2])});
         // Uniform subdivision into s*s sub-triangles of equal area, each
         // deposited at its centroid; sub-triangle edges <= a quarter cell.
-        const int s = std::max(1, static_cast<int>(std::ceil(max_edge / (0.25f * cell))));
-        const double w = opaque / (double(s) * double(s)) * inv_vol;
+        // When an alpha atlas is present, weight sub-triangles by the atlas's
+        // opaque alpha mask at each sub-triangle centroid (normalized to preserve
+        // exact triangle opaque area) so recessed non-square sprigs deposit their
+        // extinction strictly where opaque foliage exists, not into empty borders.
+        const bool use_alpha = !m.atlas.empty();
+        const int s_min = use_alpha ? 8 : 1;
+        const int s = std::max(s_min, static_cast<int>(std::ceil(max_edge / (0.25f * cell))));
         const double nx_d = double(nrm.x), ny_d = double(nrm.y), nz_d = double(nrm.z);
+
+        struct Sample { float b1, b2; };
+        std::vector<Sample> samples;
+        samples.reserve(static_cast<size_t>(s) * static_cast<size_t>(s));
+        const float inv_s = 1.0f / static_cast<float>(s);
+        auto consider = [&](float b1, float b2) {
+            if (use_alpha) {
+                const float u = t.uv[0][0] + (t.uv[1][0] - t.uv[0][0]) * b1 + (t.uv[2][0] - t.uv[0][0]) * b2;
+                const float v = t.uv[0][1] + (t.uv[1][1] - t.uv[0][1]) * b1 + (t.uv[2][1] - t.uv[0][1]) * b2;
+                if (!m.atlas.passes(u, v)) return;
+            }
+            samples.push_back({b1, b2});
+        };
+        for (int i = 0; i < s; ++i)
+            for (int j = 0; j < s - i; ++j) {
+                consider((i + 1.0f / 3.0f) * inv_s, (j + 1.0f / 3.0f) * inv_s);
+                if (i + j <= s - 2) consider((i + 2.0f / 3.0f) * inv_s, (j + 2.0f / 3.0f) * inv_s);
+            }
+        // Fallback when a tiny opaque sliver missed all sub-triangle centroids:
+        // deposit uniformly so exact trace conservation (< 1e-4) always holds.
+        if (samples.empty()) {
+            for (int i = 0; i < s; ++i)
+                for (int j = 0; j < s - i; ++j) {
+                    samples.push_back({(i + 1.0f / 3.0f) * inv_s, (j + 1.0f / 3.0f) * inv_s});
+                    if (i + j <= s - 2) samples.push_back({(i + 2.0f / 3.0f) * inv_s, (j + 2.0f / 3.0f) * inv_s});
+                }
+        }
+        const double w = opaque / static_cast<double>(samples.size()) * inv_vol;
         const double mxx = w * nx_d * nx_d;
         const double myy = w * ny_d * ny_d;
         const double mzz = w * nz_d * nz_d;
@@ -80,8 +113,8 @@ void splat_leaves(const Probe& probe, vec3 origin, float cell, int nx, int ny, i
         const double mxz = w * nx_d * nz_d;
         const double myz = w * ny_d * nz_d;
 
-        auto deposit = [&](float b1, float b2) {
-            const vec3 p = t.p[0] + (t.p[1] - t.p[0]) * b1 + (t.p[2] - t.p[0]) * b2;
+        for (const Sample& sp : samples) {
+            const vec3 p = t.p[0] + (t.p[1] - t.p[0]) * sp.b1 + (t.p[2] - t.p[0]) * sp.b2;
             const int ix = std::clamp(static_cast<int>(std::floor((p.x - origin.x) / cell)), clamp_lo[0], clamp_hi[0]);
             const int iy = std::clamp(static_cast<int>(std::floor((p.y - origin.y) / cell)), clamp_lo[1], clamp_hi[1]);
             const int iz = std::clamp(static_cast<int>(std::floor((p.z - origin.z) / cell)), clamp_lo[2], clamp_hi[2]);
@@ -92,13 +125,7 @@ void splat_leaves(const Probe& probe, vec3 origin, float cell, int nx, int ny, i
             acc[c + 3] += mxy;
             acc[c + 4] += mxz;
             acc[c + 5] += myz;
-        };
-        const float inv_s = 1.0f / static_cast<float>(s);
-        for (int i = 0; i < s; ++i)
-            for (int j = 0; j < s - i; ++j) {
-                deposit((i + 1.0f / 3.0f) * inv_s, (j + 1.0f / 3.0f) * inv_s);
-                if (i + j <= s - 2) deposit((i + 2.0f / 3.0f) * inv_s, (j + 2.0f / 3.0f) * inv_s);
-            }
+        }
     }
     for (size_t i = 0; i < acc.size(); ++i) out_c[i] = static_cast<float>(acc[i]);
 }

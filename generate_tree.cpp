@@ -230,7 +230,10 @@ GeneratedTree generate_tree(const Scenario& s, uint64_t cli_seed) {
         }
 
         const crown::CrownVolume vol = crown::CrownVolume::build_shipped(l0_probe, union_min, union_max);
-        g.crown_volume = vol.pack_option2a(crown::k_default_crown_clumping);
+        const float clumping = (s.tree.leaves.geometry_type == LeafGeometryType::BranchStrip)
+                             ? crown::k_strip_crown_clumping
+                             : crown::k_default_crown_clumping;
+        g.crown_volume = vol.pack_option2a(clumping);
 
         CrownVolumeSpec spec{};
         for (int a = 0; a < 3; ++a) {

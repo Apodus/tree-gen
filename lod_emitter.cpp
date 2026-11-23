@@ -24,10 +24,9 @@ constexpr float k_lod_screen_height_px[3] = { 120.0f, 40.0f, 15.0f };
 // distance = (ref_h * ref_proj_y * ref_vp_h) / (2 * screen_px)
 constexpr float k_lod_fallback_distance_m[3] = { 45.0f, 135.0f, 360.0f };
 
-// C3-LOD-quality: per-LOD leaf scale factor. Fewer leaves at lower LODs are
-// slightly larger to maintain canopy coverage. Tuned so count*area is approx
-// constant: L1 30%*1.4^2 ~ 59%, L2 10%*2.0^2 ~ 40%.
-constexpr float k_lod_leaf_scale[3] = { 1.0f, 1.4f, 2.0f };
+// C3-LOD-quality -> Botanical Sprig Uplift: moderated per-LOD leaf scale factor
+// avoids giant 2.0x plates at L2 while preserving canopy fill across L0/L1/L2.
+constexpr float k_lod_leaf_scale[3] = { 1.0f, 1.35f, 1.75f };
 
 // Per-LOD radial targets — L0 is the base; L1 halves; L2 quarters.
 PerOrderRadial radial_target_for_lod(int lod_index) {

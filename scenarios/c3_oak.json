@@ -38,12 +38,12 @@
   "leaves": {
     "geometry_type": "cluster_card",
     "shape": "oak_lobed",
-    "leaf_size_m": 0.48,
-    "cluster_count_per_tip": 2,
+    "leaf_size_m": 0.38,
+    "cluster_count_per_tip": 3,
     "leaf_min_branch_depth": 3,
     "leaf_density_per_meter": 4.5,
     "leaf_depth_density_curve": 1.5,
-    "leaf_phototropic_bias": 0.75,
-    "leaf_bend_half_angle": 0.392699081698724
+    "leaf_phototropic_bias": 0.35,
+    "leaf_bend_half_angle": 0.610865238198015
   }
 }

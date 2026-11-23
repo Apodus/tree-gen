@@ -60,7 +60,8 @@ inline uint8_t quantize_wind(float w) {
 // ground). Leaves on thick branches get trunk/branch influence; terminal-twig
 // leaves stay near pure leaf tier.
 void push_leaf_vert_meta(LeafMeshOutput& out, vec3 normal, vec3 tangent_dir,
-                         float branch_depth_fraction, int branch_id, int n_verts) {
+                         float branch_depth_fraction, int branch_id, int n_verts,
+                         float tangent_w = 1.0f) {
     // C8-wind P1 — host bone = site.branch_id (nearest skeleton node). Negative
     // branch_id (unbound site) clamps to 0 (root) so the index is always valid.
     const uint16_t bone = static_cast<uint16_t>(branch_id < 0 ? 0 : branch_id);
@@ -76,7 +77,7 @@ void push_leaf_vert_meta(LeafMeshOutput& out, vec3 normal, vec3 tangent_dir,
         out.tangents.push_back(tangent_dir.x);
         out.tangents.push_back(tangent_dir.y);
         out.tangents.push_back(tangent_dir.z);
-        out.tangents.push_back(1.0f);
+        out.tangents.push_back(tangent_w);
         out.wind_weights_packed.push_back(trunk_b);
         out.wind_weights_packed.push_back(branch_b);
         out.wind_weights_packed.push_back(twig_b);
@@ -310,12 +311,120 @@ void emit_bent_cross_cluster(LeafMeshOutput& out, const LeafSite& site,
                                [shape](float lx, float ly) { return uv_for_quad_corner(shape, lx, ly); });
 }
 
-// ClusterCard: crossed bent cards routed to the multi-leaf cluster cell.
+// ----- SprigBouquet (ClusterCard) -------------------------------------------
+// 3 x 4-vert Volumetric Sprig Bouquet (12 verts / 6 tris when N = 3):
+//   - Every card is a centered 4-vert quad around `center`, guaranteeing exact
+//     0.0 mm K17 centroid agreement across all cards for any 3D rotation.
+//   - Card normals n_k tilt outward from spray axis A = normalized(site.normal)
+//     by cone_tilt <= 42 deg (hard cap keeps dot(n_k, outward) > 0 under
+//     --render-glb deferred shader without !gl_FrontFacing flip).
+//   - All 4 verts of card k share bit-identical vertex normal n_k (preserving
+//     rigid wind flutter/tumble in tree.vs.glsl), while distinct n_0, n_1, n_2
+//     decorrelate macro lighting and wind across sibling cards.
+//   - Cycles through all 3 sprig variants (rows 1..3), applies ±12 deg azimuth
+//     jitter, ±15 deg in-plane roll, ±12% scale jitter, and 50% U-mirror with
+//     exact tangent handedness vec4(-right_k, -1.0f) (TRAP 3).
+template <typename SprigUvFn>
+void emit_sprig_bouquet_uv(LeafMeshOutput& out,
+                           const LeafSite& site,
+                           const LeafMeshOptions& opts,
+                           uint32_t site_idx,
+                           SprigUvFn uv_fn) {
+    constexpr float k_pi     = 3.14159265358979323846f;
+    constexpr float k_two_pi = 6.28318530717958647692f;
+    constexpr float k_deg    = k_pi / 180.0f;
+
+    const vec3 spray_axis = normalized(site.normal);
+    vec3 right0, forward0;
+    make_card_basis(spray_axis, right0, forward0);
+
+    pcg32 rng;
+    rng.seed(static_cast<uint64_t>(site_idx), k_stream_leaf_geom);
+    const float spin = rng.next_float_01() * k_two_pi;
+
+    // 1mm jitter along spray axis shared by all cards at this site -> 0.0mm centroid delta.
+    const float jitter = (rng.next_float_01() - 0.5f) * opts.wind_jitter_norm_eps_m;
+    const vec3 center = site.position + spray_axis * jitter;
+
+    const float cone_tilt = std::max(0.0f, std::min(opts.bend_half_angle, K_MAX_SPRIG_CONE_TILT_RAD));
+    const float cos_tilt  = std::cos(cone_tilt);
+    const float sin_tilt  = std::sin(cone_tilt);
+
+    const int N = opts.cluster_count_per_tip > 0 ? opts.cluster_count_per_tip : 1;
+
+    static constexpr int k_variant_perms[6][3] = {
+        {1, 2, 3}, {1, 3, 2}, {2, 1, 3}, {2, 3, 1}, {3, 1, 2}, {3, 2, 1}
+    };
+    const int* perm = k_variant_perms[rng.next_u32() % 6u];
+
+    const vec2 corners[4] = {
+        vec2{-1.0f, -1.0f}, // 0 bottom-left
+        vec2{+1.0f, -1.0f}, // 1 bottom-right
+        vec2{+1.0f, +1.0f}, // 2 top-right
+        vec2{-1.0f, +1.0f}, // 3 top-left
+    };
+
+    for (int k = 0; k < N; ++k) {
+        const float az_jitter = (rng.next_float_01() - 0.5f) * (24.0f * k_deg); // ±12 deg
+        const float az_k      = spin + (k_two_pi * static_cast<float>(k)) / static_cast<float>(N) + az_jitter;
+        const float ca = std::cos(az_k);
+        const float sa = std::sin(az_k);
+
+        // Radial and tangential unit vectors in the plane perpendicular to spray_axis.
+        const vec3 rad_k = right0 * ca + forward0 * sa;
+        const vec3 tan_k = right0 * (-sa) + forward0 * ca;
+
+        // Outward-tilted card normal n_k (dot(n_k, spray_axis) = cos(cone_tilt) >= cos(42 deg)).
+        const vec3 n_k = normalized(spray_axis * cos_tilt + rad_k * sin_tilt);
+
+        // Right-handed in-plane basis (u_axis, v_axis, n_k): cross(n_k, u_axis) = +v_axis.
+        const vec3 u_axis = normalized(tan_k);
+        const vec3 v_axis = normalized(cross(n_k, u_axis));
+
+        // ±15 deg in-plane roll.
+        const float roll_k = (rng.next_float_01() - 0.5f) * (30.0f * k_deg);
+        const float cr = std::cos(roll_k);
+        const float sr = std::sin(roll_k);
+        const vec3 right_k   = normalized(u_axis * cr + v_axis * sr);
+        const vec3 forward_k = normalized(cross(n_k, right_k));
+
+        // ±12% per-card scale jitter.
+        const float s_k = opts.leaf_size_m * (0.88f + 0.24f * rng.next_float_01());
+
+        // Deterministic 50% U-mirror (doubles 3 baked cells into 6 silhouettes).
+        const bool  mirror_u = (rng.next_u32() & 1u) != 0u;
+        const float u_sign   = mirror_u ? -1.0f : +1.0f;
+        const int   var_row  = perm[k % 3];
+
+        const uint32_t vbase = static_cast<uint32_t>(out.positions.size() / 3);
+        for (int i = 0; i < 4; ++i) {
+            const vec3 p = center + right_k * (corners[i].x * s_k) + forward_k * (corners[i].y * s_k);
+            push_xyz(out.positions, p);
+            const vec2 uv = uv_fn(var_row, corners[i].x * u_sign, corners[i].y);
+            push_uv(out.uvs, uv.x, uv.y);
+        }
+
+        // TRAP 3: when U-mirroring (lx -> -lx), +dU flips to -right_k; set w = -1.0f
+        // so B_w = cross(n_k, -right_k) * (-1.0f) = +forward_k matches -dV cleanly.
+        const vec3  tangent_dir = mirror_u ? (right_k * -1.0f) : right_k;
+        const float tangent_w   = mirror_u ? -1.0f : +1.0f;
+        push_leaf_vert_meta(out, n_k, tangent_dir, site.branch_depth_fraction, site.branch_id, 4, tangent_w);
+
+        out.indices.push_back(vbase + 0);
+        out.indices.push_back(vbase + 1);
+        out.indices.push_back(vbase + 2);
+        out.indices.push_back(vbase + 0);
+        out.indices.push_back(vbase + 2);
+        out.indices.push_back(vbase + 3);
+    }
+}
+
+// ClusterCard: volumetric 3 x 4-vert sprig bouquet sampling rows 1..3.
 void emit_cluster_card(LeafMeshOutput& out, const LeafSite& site,
                        const LeafMeshOptions& opts, uint32_t site_idx) {
     const LeafShape shape = opts.shape;
-    emit_bent_cross_cluster_uv(out, site, opts, site_idx,
-                               [shape](float lx, float ly) { return cluster_tile_uv(shape, lx, ly); });
+    emit_sprig_bouquet_uv(out, site, opts, site_idx,
+                          [shape](int row, float lx, float ly) { return sprig_tile_uv(shape, row, lx, ly); });
 }
 
 }  // namespace (anonymous — re-opened after the SoT helpers below)
@@ -351,9 +460,9 @@ int tris_per_leaf(LeafGeometryType g, LeafShape s, int cluster_count_per_tip) {
         }
         case LeafGeometryType::BranchStrip:
             return K_TRIS_PER_STRIP;
-        case LeafGeometryType::ClusterCard: {          // N crossed bent cards
+        case LeafGeometryType::ClusterCard: {          // N angled 4-vert sprig cards
             const int N = cluster_count_per_tip > 0 ? cluster_count_per_tip : 1;
-            return K_TRIS_PER_BENT_CARD * N;
+            return K_TRIS_PER_SPRIG_CARD * N;
         }
     }
     return K_TRIS_PER_LEAF_SINGLE_CARD;
@@ -373,9 +482,9 @@ int verts_per_leaf(LeafGeometryType g, LeafShape s, int cluster_count_per_tip) {
         }
         case LeafGeometryType::BranchStrip:
             return K_VERTS_PER_STRIP;
-        case LeafGeometryType::ClusterCard: {          // N crossed bent cards
+        case LeafGeometryType::ClusterCard: {          // N angled 4-vert sprig cards
             const int N = cluster_count_per_tip > 0 ? cluster_count_per_tip : 1;
-            return K_VERTS_PER_BENT_CARD * N;
+            return K_VERTS_PER_SPRIG_CARD * N;
         }
     }
     return K_VERTS_PER_LEAF_SINGLE_CARD;
@@ -445,11 +554,16 @@ LeafMeshOutput build_leaf_mesh(const std::vector<LeafSite>& sites,
             vpl_reserve = 6;
             ipl_reserve = 12;
             break;
-        case LeafGeometryType::BentCrossCluster:
-        case LeafGeometryType::ClusterCard: {
+        case LeafGeometryType::BentCrossCluster: {
             const int N = opts.cluster_count_per_tip > 0 ? opts.cluster_count_per_tip : 1;
             vpl_reserve = static_cast<size_t>(6 * N);
             ipl_reserve = static_cast<size_t>(12 * N);
+            break;
+        }
+        case LeafGeometryType::ClusterCard: {
+            const int N = opts.cluster_count_per_tip > 0 ? opts.cluster_count_per_tip : 1;
+            vpl_reserve = static_cast<size_t>(4 * N);
+            ipl_reserve = static_cast<size_t>(6 * N);
             break;
         }
         case LeafGeometryType::BranchStrip:

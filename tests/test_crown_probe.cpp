@@ -940,7 +940,7 @@ TEST_CASE("[crown_oracle] site rule: c3_oak 42 L0 sites equal the emitter's kept
     INFO("sites " << c.mesh.sites.size() << " kept " << kept);
     REQUIRE(kept > 100u);
     CHECK(c.mesh.sites.size() == kept);
-    for (const auto& s : c.mesh.sites) CHECK(s.cards == 2);   // crossed pair per site (the oak's cluster count)
+    for (const auto& s : c.mesh.sites) CHECK(s.cards == 3);   // 3-card sprig bouquet per site (the oak's cluster count)
 }
 
 TEST_CASE("[crown_oracle] the loader reads every triangle the emitter wrote", "[treegen][crown_oracle]") {
@@ -1762,11 +1762,14 @@ TEST_CASE("[crown_volume_fidelity] F2_tensor Option 2A matches leaves-only oracl
 
         struct Acc {
             double abs_tri = 0.0, abs_dda = 0.0;
+            double s_tri_err = 0.0, s_dda_err = 0.0;
             double so = 0.0, sp = 0.0, soo = 0.0, spp = 0.0, sop = 0.0;
             size_t n = 0;
             void add(double o, double t_tri, double t_dda) {
                 abs_tri += std::abs(t_tri - o);
                 abs_dda += std::abs(t_dda - o);
+                s_tri_err += (t_tri - o);
+                s_dda_err += (t_dda - o);
                 so += o; sp += t_tri; soo += o * o; spp += t_tri * t_tri; sop += o * t_tri;
                 ++n;
             }
@@ -1810,7 +1813,9 @@ TEST_CASE("[crown_volume_fidelity] F2_tensor Option 2A matches leaves-only oracl
         const double vp  = all.spp - (all.sp * all.sp) / dn;
         const double r_corr = cov / std::sqrt(std::max(1e-30, vo * vp));
 
-        INFO(sp.name << " overall: tri_MAE=" << mae_tri << " r=" << r_corr << " n=" << all.n);
+        INFO(sp.name << " overall: tri=" << mae_tri << " (b=" << (all.s_tri_err / dn)
+                     << ") dda=" << (all.abs_dda / dn) << " (b=" << (all.s_dda_err / dn)
+                     << ") r=" << r_corr << " clip=" << packed.clipped_voxels << "/" << packed.occupied_voxels);
         CHECK(mae_tri <= sp.max_overall);
         CHECK(r_corr >= 0.90);
 

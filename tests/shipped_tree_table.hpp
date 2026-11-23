@@ -43,8 +43,9 @@ inline constexpr std::array<long long, 3> k_t0_vertex_sum      = {303508, 97676,
 inline constexpr std::array<long long, 3> k_t0_bark_vertex_sum = {165052, 51500, 13784};
 inline constexpr std::array<long long, 3> k_t0_leaf_vertex_sum = {138456, 46176, 26184};
 
-// T1 (stall removed from the generator): the same sums at the T1 tip, the before-state for T2.
-inline constexpr std::array<long long, 3> k_t1_vertex_sum      = {276356, 85868, 34558};
+// Botanical Leaf Sprigs (3x4-vert sprig bouquets, 12 verts/site <= T0 budget):
+// still well under frozen k_t0_vertex_sum {303508, 97676, 39968} with 25% fewer leaf tris/site.
+inline constexpr std::array<long long, 3> k_t1_vertex_sum      = {276728, 85940, 34594};
 
 // Largest leaf_max_vertices_on_one_host at any level on a clean shipped tree:
 // [0] card species (birch, maple, oak), [1] strip species (pine).

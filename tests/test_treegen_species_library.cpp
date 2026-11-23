@@ -63,10 +63,12 @@ TEST_CASE("[treegen_species_library] 16-entry species x seed golden test + visio
         }
     }
 
-    // ---- Vision gate D1: disk size < 80 MB ----
-    // Raised from 50→80 MB: C1 P1 crotch cap at all LODs + _RYNX_LOD extension fields.
+    // ---- Vision gate D1: disk size < 96 MB ----
+    // Raised 50→80 MB (C1 P1 crotch cap + _RYNX_LOD) and 80→96 MB (Crown S-P1
+    // _RYNX_CROWN_VOLUME uncompressed F2_tensor RGBA8_UNORM+SNORM 3D bricks,
+    // ~10.2 MiB across 16 GLBs under approved Option 1A; measured ~82.2 MiB).
     INFO("total_glb_bytes=" << total_glb_bytes);
-    REQUIRE(total_glb_bytes < 80u * 1024u * 1024u);
+    REQUIRE(total_glb_bytes < 96u * 1024u * 1024u);
 
     // ---- Vision gate D1: timing WARN ----
     const double elapsed_s = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();

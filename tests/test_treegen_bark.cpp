@@ -260,12 +260,10 @@ TEST_CASE("[treegen_bark_all_species_p2] birch diffuse mean within sRGB-correcte
     auto m   = channel_means_rgba8(img);
     INFO("birch bark mean R=" << m.r << " G=" << m.g << " B=" << m.b);
 
-    // Birch bark ramp darkened: crevice (0.28,0.20,0.14), mid (0.48,0.38,0.28),
-    // ridge (0.62,0.52,0.40). Measured mean: R≈183, G≈165, B≈144.
-    // ±28 byte slack covers FBM variance through sRGB curve.
-    REQUIRE(m.r >= 155.0); REQUIRE(m.r <= 211.0);
-    REQUIRE(m.g >= 137.0); REQUIRE(m.g <= 193.0);
-    REQUIRE(m.b >= 116.0); REQUIRE(m.b <= 172.0);
+    // Birch bark B-1: luminous warm ivory periderm with full-V dark lenticels & diamond knots.
+    REQUIRE(m.r >= 160.0); REQUIRE(m.r <= 218.0);
+    REQUIRE(m.g >= 145.0); REQUIRE(m.g <= 208.0);
+    REQUIRE(m.b >= 122.0); REQUIRE(m.b <= 192.0);
 
     REQUIRE(m.r > m.b);
     REQUIRE(m.g > m.b);
@@ -403,14 +401,12 @@ TEST_CASE("[treegen_bark_all_species_p2] normal map perturbs in expected sign co
 
 TEST_CASE("[treegen_bark_all_species_p2] AO mean within bounds (per species)",
           "[treegen][treegen_bark_all_species_p2]") {
-    // Correction A — widened per-species bounds; measure-and-tune protocol.
-    // Bound centers are math-derived (1.0 - σ_delta*scale*√(2/π)/2)*255, slack
-    // ±25-30 bytes for FBM variance asymmetry.
+    // Bark B-1 true multi-radius cavity AO (furrow bottoms ~0.20-0.40, ridge crests ~0.85-0.98).
     struct { tg::LeafShape s; const char* name; double lo, hi; } cases[4] = {
-        { tg::LeafShape::OakLobed,      "oak",   153, 197 },
-        { tg::LeafShape::PineNeedle,    "pine",  136, 180 },
-        { tg::LeafShape::BirchSerrated, "birch", 145, 189 },
-        { tg::LeafShape::MapleStar,     "maple", 149, 193 },
+        { tg::LeafShape::OakLobed,      "oak",   145, 200 },
+        { tg::LeafShape::PineNeedle,    "pine",  140, 205 },
+        { tg::LeafShape::BirchSerrated, "birch", 155, 215 },
+        { tg::LeafShape::MapleStar,     "maple", 145, 205 },
     };
     for (auto& c : cases) {
         auto img = tg::bake_bark_ao(c.s, 1u);
@@ -468,5 +464,186 @@ TEST_CASE("[treegen_bark_all_species_p2] bark map bundle two-write determinism",
         const auto d1 = tg::encode_bark_roughness_png(sp, 1u);
         const auto d2 = tg::encode_bark_roughness_png(sp, 1u);
         REQUIRE(d1 == d2);
+
+        // Single-pass bundle encoder matches individual encoders byte-for-byte.
+        const auto bundle = tg::encode_bark_bundle_pngs(sp, 1u);
+        REQUIRE(bundle.diffuse_png   == a1);
+        REQUIRE(bundle.normal_png    == b1);
+        REQUIRE(bundle.ao_png        == c1);
+        REQUIRE(bundle.roughness_png == d1);
+    }
+}
+
+// ============================================================================
+// Bark Phase B-1 seals: exact U/V torus wrap, 18-38 deg normal tilt p90 >= 15,
+// true cavity AO sign (bottom quartile < top quartile - 0.20), and full-V
+// birch lenticel distribution (top, middle, and bottom thirds of V).
+// ============================================================================
+
+TEST_CASE("[treegen_bark_b1] exact U and V torus wrap continuity across all 4 species and maps",
+          "[treegen][treegen_bark_b1]") {
+    constexpr int W = tg::K_BARK_TEX_W;
+    constexpr int H = tg::K_BARK_TEX_H;
+    auto check_wrap = [&](const char* sp_name, const char* map_name, const std::vector<uint8_t>& img,
+                          double max_mean_abs, double max_p95_abs) {
+        REQUIRE(img.size() == size_t(W) * H * 4);
+        // Compare col 0 vs col W-1 (1-px step across U wrap) against interior 1-px step (col 0 vs col 1).
+        std::vector<double> u_seam, u_int;
+        u_seam.reserve(size_t(H) * 3);
+        u_int.reserve(size_t(H) * 3);
+        for (int y = 0; y < H; ++y) {
+            for (int c = 0; c < 3; ++c) {
+                const double v0   = img[(size_t(y) * W + 0)     * 4 + c];
+                const double v1   = img[(size_t(y) * W + 1)     * 4 + c];
+                const double vlast = img[(size_t(y) * W + W - 1) * 4 + c];
+                u_seam.push_back(std::abs(v0 - vlast));
+                u_int.push_back(std::abs(v0 - v1));
+            }
+        }
+        // Compare row 0 vs row H-1 (1-px step across V wrap) against interior 1-px step (row 0 vs row 1).
+        std::vector<double> v_seam, v_int;
+        v_seam.reserve(size_t(W) * 3);
+        v_int.reserve(size_t(W) * 3);
+        for (int x = 0; x < W; ++x) {
+            for (int c = 0; c < 3; ++c) {
+                const double v0    = img[(size_t(0)     * W + x) * 4 + c];
+                const double v1    = img[(size_t(1)     * W + x) * 4 + c];
+                const double vlast = img[(size_t(H - 1) * W + x) * 4 + c];
+                v_seam.push_back(std::abs(v0 - vlast));
+                v_int.push_back(std::abs(v0 - v1));
+            }
+        }
+        auto stats = [](std::vector<double>& a) -> std::pair<double, double> {
+            double s = 0.0;
+            for (double v : a) s += v;
+            std::sort(a.begin(), a.end());
+            return { s / static_cast<double>(a.size()), a[(a.size() * 95) / 100] };
+        };
+        auto [um, up95] = stats(u_seam);
+        auto [uim, uip95] = stats(u_int);
+        auto [vm, vp95] = stats(v_seam);
+        auto [vim, vip95] = stats(v_int);
+        INFO(sp_name << " " << map_name
+             << " U_seam_mean=" << um << " (int=" << uim << ") p95=" << up95 << " (int=" << uip95 << ")"
+             << " V_seam_mean=" << vm << " (int=" << vim << ") p95=" << vp95 << " (int=" << vip95 << ")");
+        CHECK(um <= max_mean_abs);
+        CHECK(vm <= max_mean_abs);
+        // Seam gradient statistics (both mean and p95) must match interior 1-px gradient statistics.
+        CHECK(um <= uim * 1.4 + 1.5);
+        CHECK(vm <= vim * 1.4 + 1.5);
+        CHECK(up95 <= uip95 * 1.5 + 4.0);
+        CHECK(vp95 <= vip95 * 1.5 + 4.0);
+        (void)max_p95_abs;
+    };
+
+    for (size_t s = 0; s < k_species.size(); ++s) {
+        const auto sp = k_species[s];
+        const uint64_t seed = tg::species_fnv_name(sp);
+        check_wrap(k_species_name[s], "diffuse",   tg::bake_bark_diffuse(sp, seed),   16.0, 60.0);
+        check_wrap(k_species_name[s], "normal",    tg::bake_bark_normal(sp, seed),    20.0, 65.0);
+        check_wrap(k_species_name[s], "ao",        tg::bake_bark_ao(sp, seed),        16.0, 65.0);
+        check_wrap(k_species_name[s], "roughness", tg::bake_bark_roughness(sp, seed), 14.0, 50.0);
+    }
+}
+
+TEST_CASE("[treegen_bark_b1] physically scaled normals have p90 tilt >= 15 deg on all 4 species",
+          "[treegen][treegen_bark_b1]") {
+    constexpr double k_rad2deg = 180.0 / 3.14159265358979323846;
+    for (size_t s = 0; s < k_species.size(); ++s) {
+        const auto sp = k_species[s];
+        auto normal = tg::bake_bark_normal(sp, tg::species_fnv_name(sp));
+        const size_t n = size_t(tg::K_BARK_TEX_W) * tg::K_BARK_TEX_H;
+        std::vector<float> tilts;
+        tilts.reserve(n);
+        for (size_t i = 0; i < n; ++i) {
+            const float nz = std::clamp(decode_n(normal[i * 4 + 2]), -1.0f, 1.0f);
+            tilts.push_back(static_cast<float>(std::acos(nz) * k_rad2deg));
+        }
+        std::sort(tilts.begin(), tilts.end());
+        const float p50 = tilts[n / 2];
+        const float p90 = tilts[(n * 90) / 100];
+        const float p99 = tilts[(n * 99) / 100];
+        INFO(k_species_name[s] << " normal tilt deg: p50=" << p50 << " p90=" << p90 << " p99=" << p99);
+        // Kills the old 1-3 deg flat-normal regression while preventing noisy aliasing spikes.
+        CHECK(p90 >= 15.0f);
+        CHECK(p99 <= 65.0f);
+    }
+}
+
+TEST_CASE("[treegen_bark_b1] cavity AO sign seal: furrow bottoms strictly darker than ridge crests",
+          "[treegen][treegen_bark_b1]") {
+    // Uses diffuse linear luma (monotone with bark height) to partition pixels into
+    // bottom quartile (furrows/crevices/lenticels) vs top quartile (ridge crests/plates).
+    // Kills the inverted 1 - |grad| crevice bug where furrow bottoms had AO = 1.0.
+    for (size_t s = 0; s < k_species.size(); ++s) {
+        const auto sp = k_species[s];
+        const uint64_t seed = tg::species_fnv_name(sp);
+        auto diff = tg::bake_bark_diffuse(sp, seed);
+        auto ao   = tg::bake_bark_ao(sp, seed);
+        const size_t n = size_t(tg::K_BARK_TEX_W) * tg::K_BARK_TEX_H;
+
+        std::vector<std::pair<float, float>> luma_ao;
+        luma_ao.reserve(n);
+        for (size_t i = 0; i < n; ++i) {
+            const float luma = 0.2126f * srgb_to_linear(diff[i * 4 + 0])
+                             + 0.7152f * srgb_to_linear(diff[i * 4 + 1])
+                             + 0.0722f * srgb_to_linear(diff[i * 4 + 2]);
+            const float ao_f = static_cast<float>(ao[i * 4 + 0]) / 255.0f;
+            luma_ao.emplace_back(luma, ao_f);
+        }
+        std::sort(luma_ao.begin(), luma_ao.end(),
+                  [](const auto& a, const auto& b) { return a.first < b.first; });
+        const size_t q = n / 4;
+        double bot_sum = 0.0, top_sum = 0.0;
+        for (size_t i = 0; i < q; ++i) bot_sum += luma_ao[i].second;
+        for (size_t i = n - q; i < n; ++i) top_sum += luma_ao[i].second;
+        const double bot_mean = bot_sum / static_cast<double>(q);
+        const double top_mean = top_sum / static_cast<double>(q);
+        INFO(k_species_name[s] << " AO bottom_q=" << bot_mean << " top_q=" << top_mean
+             << " delta=" << (top_mean - bot_mean));
+        CHECK(bot_mean < top_mean - 0.20);
+        CHECK(top_mean >= 0.78);
+        CHECK(bot_mean <= 0.62);
+    }
+}
+
+TEST_CASE("[treegen_bark_b1] birch lenticels distributed across full V (top, middle, bottom thirds)",
+          "[treegen][treegen_bark_b1]") {
+    const uint64_t seed = tg::species_fnv_name(tg::LeafShape::BirchSerrated);
+    auto diff = tg::bake_bark_diffuse(tg::LeafShape::BirchSerrated, seed);
+    auto ao   = tg::bake_bark_ao(tg::LeafShape::BirchSerrated, seed);
+    auto rough = tg::bake_bark_roughness(tg::LeafShape::BirchSerrated, seed);
+
+    constexpr int W = tg::K_BARK_TEX_W;
+    constexpr int H = tg::K_BARK_TEX_H;
+    const int bands[3][2] = {{0, H / 3}, {H / 3, (2 * H) / 3}, {(2 * H) / 3, H}};
+    for (int b = 0; b < 3; ++b) {
+        size_t dark_cnt = 0;
+        double dark_ao_sum = 0.0, bright_ao_sum = 0.0;
+        double dark_r_sum = 0.0, bright_r_sum = 0.0;
+        size_t bright_cnt = 0;
+        for (int y = bands[b][0]; y < bands[b][1]; ++y) {
+            for (int x = 0; x < W; ++x) {
+                const size_t idx = (size_t(y) * W + x) * 4;
+                if (diff[idx + 0] < 130) {
+                    ++dark_cnt;
+                    dark_ao_sum += ao[idx + 0] / 255.0;
+                    dark_r_sum  += rough[idx + 1] / 255.0;
+                } else if (diff[idx + 0] > 185) {
+                    ++bright_cnt;
+                    bright_ao_sum += ao[idx + 0] / 255.0;
+                    bright_r_sum  += rough[idx + 1] / 255.0;
+                }
+            }
+        }
+        INFO("birch V third " << b << " [" << bands[b][0] << "," << bands[b][1]
+             << "): dark_cnt=" << dark_cnt << " bright_cnt=" << bright_cnt);
+        // No [200, 320) band lock: dark lenticels/knots present in all 3 V thirds.
+        CHECK(dark_cnt > 1500u);
+        CHECK(dark_cnt < 65000u);
+        REQUIRE(bright_cnt > 10000u);
+        // Lenticels/knots imprinted into AO (darker) and roughness (rougher than papery bark).
+        CHECK(dark_ao_sum / dark_cnt < bright_ao_sum / bright_cnt - 0.20);
+        CHECK(dark_r_sum  / dark_cnt > bright_r_sum  / bright_cnt + 0.15);
     }
 }

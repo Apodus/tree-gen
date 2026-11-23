@@ -9,9 +9,11 @@
 
 namespace treegen {
 
-    // Encode raw RGBA8 pixels to PNG bytes.
+    // Encode raw RGBA8, RGB8, or Gray8 pixels to PNG bytes.
     // Pins stbi_write_png_compression_level=8 internally (defensive vs the
     // global mutable; intra-build determinism only).
     std::vector<uint8_t> encode_png_rgba8(int w, int h, int stride_bytes, const uint8_t* rgba);
+    std::vector<uint8_t> encode_png_rgb8 (int w, int h, int stride_bytes, const uint8_t* rgb);
+    std::vector<uint8_t> encode_png_gray8(int w, int h, int stride_bytes, const uint8_t* gray);
 
 }

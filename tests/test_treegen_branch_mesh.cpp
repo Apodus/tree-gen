@@ -124,3 +124,68 @@ TEST_CASE("[treegen_branch_mesh_p1] every triangle has three distinct vertices",
         REQUIRE(a != c);
     }
 }
+
+TEST_CASE("[treegen_branch_mesh_p1] Bark B-1 monotonic cumulative v_axial and constant U per tube",
+          "[treegen][treegen_branch_mesh_p1][treegen_bark_b1]") {
+    namespace tsp = rynx::test_support;
+    const auto fixture = tsp::treegen_file("scenarios/c3_oak.json");
+    REQUIRE_FALSE(fixture.empty());
+    ts::Scenario s = ts::load_scenario(fixture);
+    ts::TreeSkeleton skel = ts::grow_skeleton(s.tree, 42ull ^ s.scenario_fnv);
+
+    ts::BarkMeshOptions opts;
+    opts.seam_offset_rad = 0.37f;
+    ts::BarkMeshOutput bark = ts::build_bark_mesh(skel, opts);
+
+    // 1. Every emitted ring has constant integer U wrap (u[N] - u[0] == 1.0) and
+    //    uniform v_axial across the ring (Carbon Trap B-T1: never vary K per ring).
+    for (const auto& rm : bark.ring_metadata) {
+        const float u0 = bark.mesh.uvs[size_t(rm.vert_start) * 2 + 0];
+        const float v0 = bark.mesh.uvs[size_t(rm.vert_start) * 2 + 1];
+        const float uN = bark.mesh.uvs[size_t(rm.vert_start + rm.N) * 2 + 0];
+        REQUIRE(std::abs((uN - u0) - 1.0f) < 1e-5f);
+        for (int i = 0; i <= rm.N; ++i) {
+            const float vi = bark.mesh.uvs[size_t(rm.vert_start + i) * 2 + 1];
+            REQUIRE(std::abs(vi - v0) < 1e-5f);
+        }
+    }
+
+    // 2. Cumulative v_axial increases monotonically along every branch and across
+    //    continuation-merged joints (no backward UV reset to 0 at joints).
+    std::vector<float> min_v_for_branch(skel.nodes.size(), 1e9f);
+    std::vector<float> max_v_for_branch(skel.nodes.size(), -1e9f);
+    std::vector<bool>  has_branch(skel.nodes.size(), false);
+    int merged_joints_checked = 0;
+    int collar_rings_checked  = 0;
+
+    for (const auto& rm : bark.ring_metadata) {
+        const float v = bark.mesh.uvs[size_t(rm.vert_start) * 2 + 1];
+        if (rm.collar_fork_node >= 0) {
+            ++collar_rings_checked;
+            // Collar ring v_axial must sit strictly above its parent fork's min v (not reset to 0).
+            if (has_branch[size_t(rm.collar_fork_node)]) {
+                CHECK(v >= max_v_for_branch[size_t(rm.collar_fork_node)] - 1e-4f);
+            }
+            continue;
+        }
+        const size_t bi = size_t(rm.branch_node_index);
+        if (has_branch[bi]) {
+            // Within a branch, consecutive rings are emitted in ascending s -> v strictly increases.
+            CHECK(v > max_v_for_branch[bi] - 1e-5f);
+        }
+        min_v_for_branch[bi] = std::min(min_v_for_branch[bi], v);
+        max_v_for_branch[bi] = std::max(max_v_for_branch[bi], v);
+        has_branch[bi] = true;
+    }
+
+    for (size_t i = 1; i < skel.nodes.size(); ++i) {
+        if (!has_branch[i]) continue;
+        const int p = skel.nodes[i].parent_index;
+        if (p > 0 && has_branch[size_t(p)]) {
+            ++merged_joints_checked;
+            CHECK(min_v_for_branch[i] >= max_v_for_branch[size_t(p)] - 1e-4f);
+        }
+    }
+    REQUIRE(merged_joints_checked > 50);
+    REQUIRE(collar_rings_checked > 10);
+}

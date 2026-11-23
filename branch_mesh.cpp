@@ -144,6 +144,11 @@ BarkMeshOutput build_bark_mesh(const TreeSkeleton& skel, const BarkMeshOptions& 
     struct LastRing { int vert_start = -1; int N = 0; vec3 right = {0,0,0}; };
     std::vector<LastRing> last_ring_at_node(static_cast<size_t>(node_count));
 
+    // Bark B-1 — continuous cumulative axial distance from root (metres) so V
+    // increases monotonically across continuation-merged segments and fork collars
+    // without backward UV jumps. Integer U wrap count stays constant (K = 1) per tube.
+    std::vector<float> node_cum_dist_m(static_cast<size_t>(node_count), 0.0f);
+
     for (int i = 1; i < node_count; ++i) {
         // Per-node merge mask (face_budget's merge-by-length overflow rule).
         if (!opts.culled_node_mask.empty() && opts.culled_node_mask[size_t(i)]) continue;
@@ -156,6 +161,9 @@ BarkMeshOutput build_bark_mesh(const TreeSkeleton& skel, const BarkMeshOptions& 
         const float seg_len = length(raw);
         if (seg_len < 1e-5f) continue; // skip degenerate segment
         const vec3 seg_dir = raw / seg_len;
+
+        const float base_dist_m = node_cum_dist_m[static_cast<size_t>(node.parent_index)];
+        node_cum_dist_m[static_cast<size_t>(i)] = base_dist_m + seg_len;
 
         const int axial_segs = std::max(1, static_cast<int>(std::floor(seg_len / opts.axial_segment_length_m)));
         int N = radial_for_depth(static_cast<int>(node.depth), opts);
@@ -191,7 +199,7 @@ BarkMeshOutput build_bark_mesh(const TreeSkeleton& skel, const BarkMeshOptions& 
             const float t = static_cast<float>(s) / static_cast<float>(axial_segs);
             const vec3  center = parent.position + seg_dir * (seg_len * t);
             const float radius = parent.radius + (node.radius - parent.radius) * t;
-            const float v_axial = (seg_len * t) / opts.bark_repeat_m;
+            const float v_axial = (base_dist_m + seg_len * t) / opts.bark_repeat_m;
 
             // C12 P4 — root flare: widen the lowest rings of the trunk base.
             float flared_radius = radius;
@@ -262,7 +270,7 @@ BarkMeshOutput build_bark_mesh(const TreeSkeleton& skel, const BarkMeshOptions& 
             mesh.normals.push_back(tip_n.y);
             mesh.normals.push_back(tip_n.z);
             mesh.uvs.push_back(0.5f);
-            mesh.uvs.push_back(0.5f);
+            mesh.uvs.push_back((base_dist_m + seg_len) / opts.bark_repeat_m);
             // Tip-cap tangent: ring's right basis vector (segment basis still in scope).
             out.tangents.push_back(seg_right.x);
             out.tangents.push_back(seg_right.y);

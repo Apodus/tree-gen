@@ -31,14 +31,15 @@ struct GlbRow {
     uint64_t    fnv1a64;  // det_rng.hpp fnv1a64 over the GLB bytes
 };
 
-// Botanical Leaf Sprigs & 3D Cluster Uplift regenerated table (16-cell 1024^2
-// asymmetric botanical sprig atlas, 3x4-vert sprig bouquets, twig-straddling
-// placement, alpha-localized F2_tensor Option 2A crown volume, clumping = 0.93 / 1.05).
+// Botanical Leaf Sprigs + Tree Bark Phase B-1 regenerated table:
+// - 16-cell 1024^2 asymmetric botanical sprig atlas + 3x4-vert sprig bouquets
+// - Alpha-localized F2_tensor Option 2A crown volume (clumping = 0.93 / 1.05)
+// - Periodic 2D torus species-morphology bark (oak/pine/birch/maple) + cumulative V + dedup
 constexpr std::array<GlbRow, 4> k_glb_table = {{
-    {"oak",   42, 6948788, 0x9ae4a06e0a34349full},
-    {"maple", 42, 7829632, 0x0534dfbfe21f4fa2ull},
-    {"birch", 42, 6921260, 0x3ce6827204302903ull},
-    {"pine",  42, 5800888, 0x98fee4c14488cfdfull},
+    {"oak",   42, 6416776, 0xca83e2dd3671de00ull},
+    {"maple", 42, 7340644, 0x8e9e9d063c73dccbull},
+    {"birch", 42, 5638240, 0x5e5f6fcbb32e4bedull},
+    {"pine",  42, 5236312, 0xc41e5e38e54f0252ull},
 }};
 
 uint64_t glb_fnv(const std::vector<uint8_t>& b) {

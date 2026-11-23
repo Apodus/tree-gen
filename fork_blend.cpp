@@ -416,10 +416,12 @@ void apply_skin_rim_blend(BarkMeshOutput& bark,
             vec3 collar_right, collar_up;
             build_basis(parent_axis, collar_right, collar_up);
 
+            const float parent_rim_v = bark.mesh.uvs[static_cast<size_t>(parent_rim.vert_start) * 2 + 1];
+
             for (int ci = 0; ci < n_collar; ++ci) {
                 const float t = static_cast<float>(ci + 1) / static_cast<float>(n_collar + 1);
                 const CollarSample sample = eval_collar_curve(curve, t);
-                const float v_axial = length(sample.position - curve.p0) / opts.bark_repeat_m;
+                const float v_axial = parent_rim_v + length(sample.position - curve.p0) / opts.bark_repeat_m;
 
                 // Transport basis to this collar ring's tangent direction.
                 collar_right = parallel_transport(collar_right, sample.tangent);
@@ -585,8 +587,10 @@ void apply_skin_rim_blend(BarkMeshOutput& bark,
             mesh.normals.push_back(centroid_normal.x);
             mesh.normals.push_back(centroid_normal.y);
             mesh.normals.push_back(centroid_normal.z);
+            const float crotch_v = bark.mesh.uvs[static_cast<size_t>(parent_rim.vert_start) * 2 + 1]
+                                 + (fork_n.radius * 0.5f) / opts.bark_repeat_m;
             mesh.uvs.push_back(0.5f);
-            mesh.uvs.push_back(0.0f);
+            mesh.uvs.push_back(crotch_v);
             bark.tangents.push_back(1.0f);
             bark.tangents.push_back(0.0f);
             bark.tangents.push_back(0.0f);

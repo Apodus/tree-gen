@@ -100,14 +100,17 @@ GeneratedTree generate_tree(const Scenario& s, uint64_t cli_seed) {
     const uint64_t seed_effective = g.seed_effective;
     const bool has_leaves = scenario_has_leaves(s, g.skeleton);
 
-    // C6 P4 — bark textures (per-species, shared across LODs).
+    // Bark B-1 — per-species canonical bark texture bundle (single-pass bake,
+    // keyed deterministically on bark_species for VRAM dedup across seeds; per-tree
+    // rotational variety comes from bopts.seam_offset_rad).
     const LeafShape bark_species = s.tree.leaves.shape;
     {
+        BarkPngBundle bark = encode_bark_bundle_pngs(bark_species, species_fnv_name(bark_species));
         ImageData d, n, ao, mr;
-        d.png_bytes  = encode_bark_png(bark_species, seed_effective);
-        n.png_bytes  = encode_bark_normal_png(bark_species, seed_effective);
-        ao.png_bytes = encode_bark_ao_png(bark_species, seed_effective);
-        mr.png_bytes = encode_bark_roughness_png(bark_species, seed_effective);
+        d.png_bytes  = std::move(bark.diffuse_png);
+        n.png_bytes  = std::move(bark.normal_png);
+        ao.png_bytes = std::move(bark.ao_png);
+        mr.png_bytes = std::move(bark.roughness_png);
         g.images.push_back(std::move(d));   // index 0
         g.images.push_back(std::move(n));   // index 1
         g.images.push_back(std::move(ao));  // index 2

@@ -23,10 +23,10 @@ namespace treegen::crown {
 
 // Physical twig-bouquet clumping index Omega:
 // - Broadleaf 3-card sprig bouquets (ClusterCard) straddling real twigs exhibit
-//   shoot-level clumping ~0.887 (matches temperate broadleaf shoot clumping and
-//   balances GPU hardware-trilinear vs DDA extinction across multi-normal bouquets).
+//   shoot-level clumping ~0.93 (balances GPU hardware-trilinear vs DDA extinction
+//   across multi-normal asymmetric branching bouquets).
 // - Conifer BranchStrip shoots distribute uniformly along branches (~1.05).
-inline constexpr float k_default_crown_clumping   = 0.887f;
+inline constexpr float k_default_crown_clumping   = 0.93f;
 inline constexpr float k_strip_crown_clumping     = 1.05f;
 inline constexpr float k_default_target_cell_m    = 0.20f;
 inline constexpr int   k_default_max_l0_dim       = 64;

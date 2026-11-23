@@ -32,13 +32,13 @@ struct GlbRow {
 };
 
 // Botanical Leaf Sprigs & 3D Cluster Uplift regenerated table (16-cell 1024^2
-// botanical sprig atlas, 3x4-vert sprig bouquets, twig-straddling placement,
-// alpha-localized F2_tensor Option 2A crown volume, clumping = 0.887 / 1.05).
+// asymmetric botanical sprig atlas, 3x4-vert sprig bouquets, twig-straddling
+// placement, alpha-localized F2_tensor Option 2A crown volume, clumping = 0.93 / 1.05).
 constexpr std::array<GlbRow, 4> k_glb_table = {{
-    {"oak",   42, 6948024, 0x50168b409aeca32aull},
-    {"maple", 42, 7828868, 0x6b425f4bd7d60b5aull},
-    {"birch", 42, 6920496, 0x182404e4719e2ee9ull},
-    {"pine",  42, 5800124, 0xabcfeb9603f74f88ull},
+    {"oak",   42, 6948788, 0x9ae4a06e0a34349full},
+    {"maple", 42, 7829632, 0x0534dfbfe21f4fa2ull},
+    {"birch", 42, 6921260, 0x3ce6827204302903ull},
+    {"pine",  42, 5800888, 0x98fee4c14488cfdfull},
 }};
 
 uint64_t glb_fnv(const std::vector<uint8_t>& b) {

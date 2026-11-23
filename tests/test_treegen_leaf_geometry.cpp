@@ -57,20 +57,33 @@ TEST_CASE("treegen_leaf_geometry: shape polygon tri counts pinned",
     INFO("birch verts=" << bir.verts.size() << " tris=" << bir.tris.size()  / 3);
     INFO("maple verts=" << map.verts.size() << " tris=" << map.tris.size()  / 3);
 
-    // Pinned per spec (P2 targets — exact counts).
-    REQUIRE(oak.verts.size() == 15u);
-    REQUIRE(oak.tris.size()  == 14u * 3u);
+    // Pinned botanical shape vertex/triangle counts.
+    REQUIRE(oak.verts.size() == 65u);
+    REQUIRE(oak.tris.size()  == 64u * 3u);
 
-    REQUIRE(pine.verts.size() == 6u);
-    REQUIRE(pine.tris.size()  == 4u * 3u);
+    REQUIRE(pine.verts.size() == 9u);
+    REQUIRE(pine.tris.size()  == 7u * 3u);
 
-    // Birch lands at 15 perimeter (1 center + 15 verts = 16 total → 15 fan tris)
-    // due to the asymmetric serrated/smooth side split.
-    REQUIRE(bir.verts.size() == 16u);
-    REQUIRE(bir.tris.size()  == 15u * 3u);
+    REQUIRE(bir.verts.size() == 65u);
+    REQUIRE(bir.tris.size()  == 64u * 3u);
 
-    REQUIRE(map.verts.size() == 16u);
-    REQUIRE(map.tris.size()  == 20u * 3u);
+    REQUIRE(map.verts.size() == 73u);
+    REQUIRE(map.tris.size()  == 72u * 3u);
+
+    // Every triangle in every botanical shape has strictly positive signed CCW area.
+    auto check_positive_area = [](const treegen::LeafShapeMesh& m) {
+        for (size_t t = 0; t < m.tris.size(); t += 3) {
+            const auto a = m.verts[m.tris[t + 0]];
+            const auto b = m.verts[m.tris[t + 1]];
+            const auto c = m.verts[m.tris[t + 2]];
+            const float area2 = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+            REQUIRE(area2 > 1e-6f);
+        }
+    };
+    check_positive_area(oak);
+    check_positive_area(pine);
+    check_positive_area(bir);
+    check_positive_area(map);
 
     // Every shape's vertices stay in [-1, 1].
     auto check_bounds = [](const treegen::LeafShapeMesh& m) {
@@ -126,10 +139,10 @@ TEST_CASE("treegen_leaf_geometry: ProceduralVeined hits per-shape vert/tri count
         size_t expected_tris_per_leaf;
     };
     const Case cases[] = {
-        { treegen::LeafShape::OakLobed,      15, 14 },
-        { treegen::LeafShape::PineNeedle,     6,  4 },
-        { treegen::LeafShape::BirchSerrated, 16, 15 },
-        { treegen::LeafShape::MapleStar,     16, 20 },
+        { treegen::LeafShape::OakLobed,      65, 64 },
+        { treegen::LeafShape::PineNeedle,     9,  7 },
+        { treegen::LeafShape::BirchSerrated, 65, 64 },
+        { treegen::LeafShape::MapleStar,     73, 72 },
     };
 
     for (const auto& c : cases) {
@@ -161,7 +174,7 @@ TEST_CASE("treegen_leaf_geometry: per-vertex normals are unit-length and equal s
     const Case k_cases[] = {
         { treegen::LeafGeometryType::SingleCard,        4u },
         { treegen::LeafGeometryType::BentCrossCluster, 12u },
-        { treegen::LeafGeometryType::ProceduralVeined, 15u },
+        { treegen::LeafGeometryType::ProceduralVeined, 65u },
     };
     for (const auto& c : k_cases) {
         treegen::LeafMeshOptions opts;

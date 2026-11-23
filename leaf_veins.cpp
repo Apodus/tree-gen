@@ -2,48 +2,12 @@
 // which decides per-pixel vein-height bytes. See treegen.sharpmake.cs.
 #include "leaf_veins.hpp"
 
-#include <algorithm>
 #include <cmath>
 #include <cstdint>
 
 namespace treegen {
 
-namespace {
-
-constexpr float k_pi      = 3.14159265358979323846f;
-constexpr float k_half_pi = 1.57079632679489661923f;
-
-// Lateral picker for oak/birch: from `n_perim` perimeter verts (indices
-// 1..n_perim in the mesh), drop the vert nearest θ=π/2 (the apex on +Y) and
-// evenly stride the rest into 4 laterals. Returns mesh indices.
-void pick_4_laterals_skip_apex(int n_perim, std::vector<int>& out_indices,
-                               const LeafShapeMesh& mesh) {
-    // Find apex index (perimeter vert with angle closest to +π/2 = atan2(y, x)).
-    int apex_local = 0;
-    float best_da = 1e9f;
-    for (int i = 0; i < n_perim; ++i) {
-        const vec2 v = mesh.verts[1 + i];
-        const float a = std::atan2(v.y, v.x);
-        const float da = std::abs(a - k_half_pi);
-        if (da < best_da) { best_da = da; apex_local = i; }
-    }
-    // Build the candidate ring skipping apex; stride evenly into 4.
-    std::vector<int> ring;
-    ring.reserve(static_cast<size_t>(n_perim - 1));
-    for (int i = 0; i < n_perim; ++i) {
-        if (i == apex_local) continue;
-        ring.push_back(1 + i);
-    }
-    const int m = static_cast<int>(ring.size());
-    for (int k = 0; k < 4; ++k) {
-        const int j = (k * m) / 4;  // 0, m/4, m/2, 3m/4 (truncation; deterministic)
-        out_indices.push_back(ring[j]);
-    }
-}
-
-}  // namespace
-
-std::vector<VeinSegment> veins_for_species(LeafShape s, const LeafShapeMesh& mesh) {
+std::vector<VeinSegment> veins_for_species(LeafShape s, const LeafShapeMesh& /*mesh*/) {
     std::vector<VeinSegment> out;
     switch (s) {
         case LeafShape::PineNeedle: {
@@ -52,36 +16,41 @@ std::vector<VeinSegment> veins_for_species(LeafShape s, const LeafShapeMesh& mes
             break;
         }
         case LeafShape::OakLobed: {
-            const int n_perim = static_cast<int>(mesh.verts.size()) - 1;  // 14
-            out.push_back(VeinSegment{vec2{0.0f, 0.0f}, vec2{0.0f, +1.0f}});
-            std::vector<int> lat;
-            pick_4_laterals_skip_apex(n_perim, lat, mesh);
-            for (int idx : lat) {
-                const vec2 tip = mesh.verts[idx];
-                out.push_back(VeinSegment{vec2{0.0f, 0.0f}, vec2{tip.x * 0.85f, tip.y * 0.85f}});
+            // Strong central midrib + 4 pinnate lateral pairs running into the lobes.
+            out.push_back(VeinSegment{vec2{0.0f, -0.92f}, vec2{0.0f, +0.94f}});
+            const float roots[4]  = { -0.45f, -0.10f, +0.25f, +0.55f };
+            const float tip_x[4]  = {  0.34f,  0.54f,  0.46f,  0.26f };
+            const float tip_y[4]  = { -0.26f, +0.16f, +0.52f, +0.76f };
+            for (int k = 0; k < 4; ++k) {
+                out.push_back(VeinSegment{vec2{0.0f, roots[k]}, vec2{+tip_x[k], tip_y[k]}});
+                out.push_back(VeinSegment{vec2{0.0f, roots[k]}, vec2{-tip_x[k], tip_y[k]}});
             }
             break;
         }
         case LeafShape::BirchSerrated: {
-            const int n_perim = static_cast<int>(mesh.verts.size()) - 1;  // 15
-            out.push_back(VeinSegment{vec2{0.0f, 0.0f}, vec2{0.0f, +1.0f}});
-            std::vector<int> lat;
-            pick_4_laterals_skip_apex(n_perim, lat, mesh);
-            for (int idx : lat) {
-                const vec2 tip = mesh.verts[idx];
-                out.push_back(VeinSegment{vec2{0.0f, 0.0f}, vec2{tip.x * 0.85f, tip.y * 0.85f}});
+            // Central midrib + 5 ascending pinnate lateral pairs.
+            out.push_back(VeinSegment{vec2{0.0f, -0.84f}, vec2{0.0f, +0.92f}});
+            const float roots[5]  = { -0.58f, -0.32f, -0.05f, +0.22f, +0.48f };
+            const float tip_x[5]  = {  0.52f,  0.56f,  0.44f,  0.30f,  0.16f };
+            const float tip_y[5]  = { -0.34f, -0.02f, +0.26f, +0.52f, +0.74f };
+            for (int k = 0; k < 5; ++k) {
+                out.push_back(VeinSegment{vec2{0.0f, roots[k]}, vec2{+tip_x[k], tip_y[k]}});
+                out.push_back(VeinSegment{vec2{0.0f, roots[k]}, vec2{-tip_x[k], tip_y[k]}});
             }
             break;
         }
         case LeafShape::MapleStar: {
-            // Outer ring verts live at indices 11..15. verts[11] is the +Y star
-            // point (phase shift in leaf_shapes::maple_star).
-            const vec2 apex = mesh.verts[11];
-            out.push_back(VeinSegment{vec2{0.0f, 0.0f}, apex});
-            for (int i = 12; i <= 15; ++i) {
-                const vec2 tip = mesh.verts[i];
-                out.push_back(VeinSegment{vec2{0.0f, 0.0f}, vec2{tip.x * 0.90f, tip.y * 0.90f}});
-            }
+            // 5 palmate primary veins radiating from the basal palm junction into the 5 lobes,
+            // plus secondary side veins off the central lobe.
+            const vec2 base{0.0f, -0.18f};
+            out.push_back(VeinSegment{base, vec2{ 0.00f, +0.94f}});  // central lobe
+            out.push_back(VeinSegment{base, vec2{+0.72f, +0.44f}});  // upper-right lobe
+            out.push_back(VeinSegment{base, vec2{-0.72f, +0.44f}});  // upper-left lobe
+            out.push_back(VeinSegment{base, vec2{+0.50f, -0.22f}});  // basal-right lobe
+            out.push_back(VeinSegment{base, vec2{-0.50f, -0.22f}});  // basal-left lobe
+            // Secondary veins off central midrib.
+            out.push_back(VeinSegment{vec2{0.0f, +0.25f}, vec2{+0.24f, +0.52f}});
+            out.push_back(VeinSegment{vec2{0.0f, +0.25f}, vec2{-0.24f, +0.52f}});
             break;
         }
     }

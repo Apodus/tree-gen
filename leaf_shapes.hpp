@@ -27,13 +27,13 @@ struct LeafShapeMesh {
     std::vector<uint16_t> tris;   // triangle list (3 indices per tri)
 };
 
-// Per-shape polygons. Triangle counts (P2 actuals — emitter is ground truth;
+// Per-shape botanical polygons. Triangle counts (emitter is ground truth;
 // tris_per_leaf_shape() in leaf_geometry.hpp exposes the same numbers at
 // runtime so consumers never duplicate this table):
-//   oak_lobed       : 14 tris, 15 verts (1 center + 14 perimeter)
-//   pine_needle     :  4 tris,  6 verts (2 rows × 3 cols)
-//   birch_serrated  : 15 tris, 16 verts (1 center + 15 perimeter)
-//   maple_star      : 20 tris, 16 verts (1 center + 5 inner + 5 mid + 5 outer)
+//   oak_lobed       : 64 tris, 65 verts (1 center + 64 perimeter; 7-9 lobe + basal auricles)
+//   pine_needle     :  7 tris,  9 verts (4-row tapered strip + pointed tip)
+//   birch_serrated  : 64 tris, 65 verts (1 center + 64 perimeter; doubly-serrated ovate/cordate)
+//   maple_star      : 72 tris, 73 verts (1 center + 72 perimeter; 5-lobe palmate with U-sinuses)
 LeafShapeMesh oak_lobed();
 LeafShapeMesh pine_needle();
 LeafShapeMesh birch_serrated();

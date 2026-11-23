@@ -268,89 +268,88 @@ TEST_CASE("[treegen_leaf_atlas_p3] diffuse within species hue + gradient range",
 }
 
 
-// ---- Test 5: unused cells (rows>0 or cols>3) are transparent ---------------
-TEST_CASE("[treegen_leaf_atlas_p3] unused cells are transparent",
+// ---- Test 5: all 16 cells populated with clean 4-px transparent padding -----
+TEST_CASE("[treegen_leaf_atlas_p3] all 16 cells populated with transparent 4-px padding",
           "[treegen][treegen_leaf_atlas_p3]") {
     auto png = tg::encode_leaf_atlas_png(5u);
     auto d = decode_atlas(png);
 
-    // Per P1 layout: row=0 cols=0..3 are used; needle-strip cell at row=1
-    // col=1; C3 P1 cluster cells at row=2 cols=0..3. All other cells must be
-    // alpha=0 in every pixel.
     for (int row = 0; row < tg::K_LEAF_ATLAS_DIM; ++row) {
         for (int col = 0; col < tg::K_LEAF_ATLAS_DIM; ++col) {
-            if (row == 0 && col >= 0 && col <= 3) continue;
-            if (row == tg::K_NEEDLE_STRIP_CELL_ROW && col == tg::K_NEEDLE_STRIP_CELL_COL) continue;
-            if (row == tg::K_LEAF_CLUSTER_CELL_ROW && col >= 0 && col <= 3) continue;
             const int x0 = col * tg::K_LEAF_CELL_PX;
             const int y0 = row * tg::K_LEAF_CELL_PX;
-            for (int y = y0; y < y0 + tg::K_LEAF_CELL_PX; ++y) {
-                for (int x = x0; x < x0 + tg::K_LEAF_CELL_PX; ++x) {
-                    const uint8_t a = d.bytes[(y * d.w + x) * 4 + 3];
-                    if (a != 0) {
-                        INFO("non-transparent pixel in unused cell row=" << row << " col=" << col
-                             << " px=(" << x << "," << y << ") alpha=" << int(a));
+            int opaque = 0;
+            for (int y = 0; y < tg::K_LEAF_CELL_PX; ++y) {
+                for (int x = 0; x < tg::K_LEAF_CELL_PX; ++x) {
+                    const uint8_t a = d.bytes[((y0 + y) * d.w + (x0 + x)) * 4 + 3];
+                    const bool in_pad = (x < tg::K_LEAF_CELL_PAD_PX ||
+                                         x >= tg::K_LEAF_CELL_PX - tg::K_LEAF_CELL_PAD_PX ||
+                                         y < tg::K_LEAF_CELL_PAD_PX ||
+                                         y >= tg::K_LEAF_CELL_PX - tg::K_LEAF_CELL_PAD_PX);
+                    if (in_pad) {
+                        INFO("non-transparent pad pixel in cell (" << row << "," << col << ") at (" << x << "," << y << ")");
                         REQUIRE(a == 0);
+                    } else if (a > 0) {
+                        ++opaque;
                     }
                 }
             }
+            INFO("cell (" << row << "," << col << ") opaque=" << opaque);
+            REQUIRE(opaque > 2000);
         }
     }
 }
 
 
-// ---- Test 5b (C3 P1): cluster cell holds MULTIPLE distinct sub-region leaves --
-// The whole point of ClusterCard is a multi-leaf texture. A single full-cell
-// leaf (what rasterize_leaf_alpha_into_cell would emit) = ONE connected
-// component filling the usable rect. The cluster bake stamps a jittered grid of
-// scaled sub-region leaves → many small, separated components. Assert ≥3
-// components AND that no single component spans the full cell (not a splat).
+// ---- Test 5b: sprig cells hold MULTIPLE distinct sub-cluster components -----
 TEST_CASE("[treegen_leaf_atlas_p3] cluster cell has multiple distinct leaves",
           "[treegen][treegen_leaf_atlas_p3]") {
     auto png = tg::encode_leaf_atlas_png(51u);
     auto d = decode_atlas(png);
 
-    for (size_t si = 0; si < k_species.size(); ++si) {
-        const auto sp = k_species[si];
-        const int x0 = tg::leaf_cluster_cell_col(sp) * tg::K_LEAF_CELL_PX;
-        const int y0 = tg::K_LEAF_CLUSTER_CELL_ROW  * tg::K_LEAF_CELL_PX;
-        const int w = tg::K_LEAF_CELL_PX, h = tg::K_LEAF_CELL_PX;
+    for (int row = tg::K_LEAF_SPRIG_ROW_MIN; row <= tg::K_LEAF_SPRIG_ROW_MAX; ++row) {
+        for (size_t si = 0; si < k_species.size(); ++si) {
+            const auto sp = k_species[si];
+            if (sp == tg::LeafShape::PineNeedle && row == tg::K_NEEDLE_STRIP_CELL_ROW) continue;
+            const int x0 = tg::leaf_cluster_cell_col(sp) * tg::K_LEAF_CELL_PX;
+            const int y0 = row * tg::K_LEAF_CELL_PX;
+            const int w = tg::K_LEAF_CELL_PX, h = tg::K_LEAF_CELL_PX;
 
-        std::vector<uint8_t> mark(static_cast<size_t>(w) * h, 0);
-        for (int y = 0; y < h; ++y)
-            for (int x = 0; x < w; ++x)
-                mark[y * w + x] = d.bytes[((y0 + y) * d.w + (x0 + x)) * 4 + 3] > 0 ? 1u : 0u;
+            std::vector<uint8_t> mark(static_cast<size_t>(w) * h, 0);
+            for (int y = 0; y < h; ++y)
+                for (int x = 0; x < w; ++x)
+                    mark[y * w + x] = d.bytes[((y0 + y) * d.w + (x0 + x)) * 4 + 3] > 0 ? 1u : 0u;
 
-        int components = 0, max_comp_w = 0, max_comp_h = 0;
-        for (int y = 0; y < h; ++y) {
-            for (int x = 0; x < w; ++x) {
-                if (mark[y * w + x] != 1) continue;
-                ++components;
-                int minx = x, maxx = x, miny = y, maxy = y;
-                std::queue<std::pair<int,int>> q;
-                q.push({x, y}); mark[y * w + x] = 2;
-                while (!q.empty()) {
-                    auto [cx, cy] = q.front(); q.pop();
-                    minx = std::min(minx, cx); maxx = std::max(maxx, cx);
-                    miny = std::min(miny, cy); maxy = std::max(maxy, cy);
-                    constexpr int dx[4] = {-1, 1, 0, 0};
-                    constexpr int dy[4] = {0, 0, -1, 1};
-                    for (int k = 0; k < 4; ++k) {
-                        const int nx = cx + dx[k], ny = cy + dy[k];
-                        if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
-                        if (mark[ny * w + nx] == 1) { mark[ny * w + nx] = 2; q.push({nx, ny}); }
+            int components = 0, max_comp_w = 0, max_comp_h = 0;
+            for (int y = 0; y < h; ++y) {
+                for (int x = 0; x < w; ++x) {
+                    if (mark[y * w + x] != 1) continue;
+                    ++components;
+                    int minx = x, maxx = x, miny = y, maxy = y;
+                    std::queue<std::pair<int,int>> q;
+                    q.push({x, y}); mark[y * w + x] = 2;
+                    while (!q.empty()) {
+                        auto [cx, cy] = q.front(); q.pop();
+                        minx = std::min(minx, cx); maxx = std::max(maxx, cx);
+                        miny = std::min(miny, cy); maxy = std::max(maxy, cy);
+                        constexpr int dx[4] = {-1, 1, 0, 0};
+                        constexpr int dy[4] = {0, 0, -1, 1};
+                        for (int k = 0; k < 4; ++k) {
+                            const int nx = cx + dx[k], ny = cy + dy[k];
+                            if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+                            if (mark[ny * w + nx] == 1) { mark[ny * w + nx] = 2; q.push({nx, ny}); }
+                        }
                     }
+                    max_comp_w = std::max(max_comp_w, maxx - minx + 1);
+                    max_comp_h = std::max(max_comp_h, maxy - miny + 1);
                 }
-                max_comp_w = std::max(max_comp_w, maxx - minx + 1);
-                max_comp_h = std::max(max_comp_h, maxy - miny + 1);
             }
+            INFO("species=" << k_species_name[si] << " row=" << row
+                 << " cluster components=" << components
+                 << " max_comp=" << max_comp_w << "x" << max_comp_h);
+            REQUIRE(components >= 3);
+            REQUIRE(max_comp_w < (tg::K_LEAF_CELL_USABLE_PX * 3) / 4);
         }
-        INFO("species=" << k_species_name[si] << " cluster components=" << components
-             << " max_comp=" << max_comp_w << "x" << max_comp_h);
-        // Multiple distinct leaves — not a single full-cell splat.
-        REQUIRE(components >= 3);
-        // No component spans the whole usable rect (a single leaf would).
-        REQUIRE(max_comp_w < (tg::K_LEAF_CELL_USABLE_PX * 3) / 4);
     }
 }
 
@@ -501,29 +500,21 @@ TEST_CASE("[treegen_leaf_atlas_p3] normal atlas dims and flat default in padding
     REQUIRE(d.w == tg::K_LEAF_ATLAS_PX);
     REQUIRE(d.h == tg::K_LEAF_ATLAS_PX);
 
-    // Padding pixels must be flat normal (128, 128, 255).
-    for (size_t si = 0; si < k_species.size(); ++si) {
-        const auto sp = k_species[si];
-        const CellRect r = cell_rect(sp);
-        // Top padding band.
-        for (int dy = 0; dy < tg::K_LEAF_CELL_PAD_PX; ++dy) {
-            for (int x = r.x0; x < r.x1; ++x) {
-                const size_t idx = (static_cast<size_t>(r.y0 + dy) * d.w + x) * 4;
-                INFO("species=" << k_species_name[si] << " pad pixel (" << x << "," << r.y0 + dy << ")");
-                REQUIRE(d.bytes[idx + 0] == 128);
-                REQUIRE(d.bytes[idx + 1] == 128);
-                REQUIRE(d.bytes[idx + 2] == 255);
+    // Padding pixels must be flat normal (128, 128, 255) across all 16 cells.
+    for (int row = 0; row < tg::K_LEAF_ATLAS_DIM; ++row) {
+        for (int col = 0; col < tg::K_LEAF_ATLAS_DIM; ++col) {
+            const int x0 = col * tg::K_LEAF_CELL_PX;
+            const int y0 = row * tg::K_LEAF_CELL_PX;
+            for (int dy = 0; dy < tg::K_LEAF_CELL_PAD_PX; ++dy) {
+                for (int x = x0; x < x0 + tg::K_LEAF_CELL_PX; ++x) {
+                    const size_t idx = (static_cast<size_t>(y0 + dy) * d.w + x) * 4;
+                    INFO("cell=(" << row << "," << col << ") pad pixel (" << x << "," << y0 + dy << ")");
+                    REQUIRE(d.bytes[idx + 0] == 128);
+                    REQUIRE(d.bytes[idx + 1] == 128);
+                    REQUIRE(d.bytes[idx + 2] == 255);
+                }
             }
         }
-    }
-    // Unused cell (row=1, col=0) must also be flat normal.
-    {
-        const int x = tg::K_LEAF_CELL_PX / 2;  // middle of cell (1,0)
-        const int y = tg::K_LEAF_CELL_PX + tg::K_LEAF_CELL_PX / 2;
-        const size_t idx = (static_cast<size_t>(y) * d.w + x) * 4;
-        REQUIRE(d.bytes[idx + 0] == 128);
-        REQUIRE(d.bytes[idx + 1] == 128);
-        REQUIRE(d.bytes[idx + 2] == 255);
     }
 }
 
@@ -789,10 +780,7 @@ TEST_CASE("[treegen_leaf_atlas_p3] roughness increases with vein height",
 // Needle-strip orientation test (18).
 // ============================================================================
 
-// ---- Test 18: needle-strip orientation — needles slotted along V ------------
-// Needles extend across U (strip width) and are slotted along V (branch axis).
-// A horizontal scan (fixed Y, sweep X) crosses one needle body → few transitions.
-// A vertical scan (fixed X, sweep Y) crosses 8 needle slots → many transitions.
+// ---- Test 18: needle-strip orientation — V-fanned fascicles slotted along V --
 TEST_CASE("[treegen_leaf_atlas_p3] needle strip orientation: needles along V",
           "[treegen][treegen_leaf_atlas_p3][needle_strip]") {
     auto png = tg::encode_leaf_atlas_png(18u);
@@ -801,29 +789,241 @@ TEST_CASE("[treegen_leaf_atlas_p3] needle strip orientation: needles along V",
     const int x0 = tg::K_NEEDLE_STRIP_CELL_COL * tg::K_LEAF_CELL_PX;
     const int y0 = tg::K_NEEDLE_STRIP_CELL_ROW * tg::K_LEAF_CELL_PX;
     const int cx = x0 + tg::K_LEAF_CELL_PX / 2;
-    const int cy = y0 + tg::K_LEAF_CELL_PX / 2;
 
-    // Count alpha 0→255 and 255→0 transitions along a scanline.
-    auto count_transitions = [&](int fixed_x, int fixed_y, bool sweep_x) -> int {
+    // Count alpha 0->255 and 255->0 transitions along a vertical scanline.
+    auto count_v_transitions = [&](int fixed_x) -> int {
         int transitions = 0;
         bool prev_opaque = false;
-        const int len = tg::K_LEAF_CELL_PX;
-        for (int i = 0; i < len; ++i) {
-            const int px = sweep_x ? (x0 + i) : fixed_x;
-            const int py = sweep_x ? fixed_y  : (y0 + i);
-            const bool opaque = d.bytes[(py * d.w + px) * 4 + 3] > 0;
+        for (int i = 0; i < tg::K_LEAF_CELL_PX; ++i) {
+            const bool opaque = d.bytes[((y0 + i) * d.w + fixed_x) * 4 + 3] > 0;
             if (i > 0 && opaque != prev_opaque) ++transitions;
             prev_opaque = opaque;
         }
         return transitions;
     };
 
-    // Horizontal scan at cell center Y: one needle extends full U → few transitions.
-    const int h_trans = count_transitions(0, cy, true);
-    // Vertical scan at cell center X: crosses 8 needle slots → many transitions.
-    const int v_trans = count_transitions(cx, 0, false);
+    // Vertical scans across the left and right fanned fascicles cross all 8 whorls.
+    const int v_left  = count_v_transitions(cx - 48);
+    const int v_right = count_v_transitions(cx + 48);
+    INFO("vertical transitions left=" << v_left << " right=" << v_right);
+    REQUIRE(v_left >= 12);
+    REQUIRE(v_right >= 12);
 
-    INFO("horizontal transitions=" << h_trans << " vertical transitions=" << v_trans);
-    REQUIRE(h_trans <= 4);
-    REQUIRE(v_trans >= 12);
+    // Anti-horizontal-comb check: V-fanned needles have strong horizontal alpha gradient
+    // (dAlpha/dx != 0) across the interior, unlike horizontal bars.
+    int dx_edges = 0, dy_edges = 0;
+    for (int y = 8; y < tg::K_LEAF_CELL_PX - 8; ++y) {
+        for (int x = 24; x < tg::K_LEAF_CELL_PX - 24; ++x) {
+            const bool a  = d.bytes[((y0 + y) * d.w + (x0 + x)) * 4 + 3] > 0;
+            const bool ax = d.bytes[((y0 + y) * d.w + (x0 + x + 1)) * 4 + 3] > 0;
+            const bool ay = d.bytes[((y0 + y + 1) * d.w + (x0 + x)) * 4 + 3] > 0;
+            if (a != ax) ++dx_edges;
+            if (a != ay) ++dy_edges;
+        }
+    }
+    INFO("pine fascicle dx_edges=" << dx_edges << " dy_edges=" << dy_edges);
+    REQUIRE(dx_edges > dy_edges / 3);  // angled needles (pure horizontal bars have dx_edges << dy_edges)
+}
+
+// ============================================================================
+// Botanical Sprig Uplift Seals (19-22).
+// ============================================================================
+
+// ---- Test 19: Non-squareness, 16-px recess, empty 32x32 corners & anti-grid -
+TEST_CASE("[treegen_leaf_atlas_p3] botanical sprigs: empty corners, recessed, bbox fill < 0.72, anti-grid",
+          "[treegen][treegen_leaf_atlas_p3][botanical_sprigs]") {
+    auto png = tg::encode_leaf_atlas_png(19u);
+    auto d = decode_atlas(png);
+
+    constexpr int W = tg::K_LEAF_CELL_PX;
+    constexpr int R = tg::K_LEAF_SPRIG_RECESS_PX;
+    constexpr int C = tg::K_LEAF_SPRIG_CORNER_PX;
+
+    for (int row = tg::K_LEAF_SPRIG_ROW_MIN; row <= tg::K_LEAF_SPRIG_ROW_MAX; ++row) {
+        for (size_t si = 0; si < k_species.size(); ++si) {
+            const auto sp = k_species[si];
+            if (sp == tg::LeafShape::PineNeedle && row == tg::K_NEEDLE_STRIP_CELL_ROW) continue;
+
+            const int x0 = tg::leaf_cluster_cell_col(sp) * W;
+            const int y0 = row * W;
+
+            int minx = W, maxx = -1, miny = W, maxy = -1;
+            int opaque = 0;
+            std::vector<double> mask(static_cast<size_t>(W) * W, 0.0);
+
+            for (int y = 0; y < W; ++y) {
+                for (int x = 0; x < W; ++x) {
+                    const uint8_t a = d.bytes[((y0 + y) * d.w + (x0 + x)) * 4 + 3];
+                    const bool in_recess = (x < R || x >= W - R || y < R || y >= W - R);
+                    const bool in_corner = (x + y < C) ||
+                                           ((W - 1 - x) + y < C) ||
+                                           (x + (W - 1 - y) < C) ||
+                                           ((W - 1 - x) + (W - 1 - y) < C);
+                    if (in_recess || in_corner) {
+                        INFO("species=" << k_species_name[si] << " row=" << row
+                             << " px=(" << x << "," << y << ") alpha=" << int(a));
+                        REQUIRE(a == 0);
+                    }
+                    if (a > 0) {
+                        ++opaque;
+                        minx = std::min(minx, x); maxx = std::max(maxx, x);
+                        miny = std::min(miny, y); maxy = std::max(maxy, y);
+                        mask[static_cast<size_t>(y) * W + x] = 1.0;
+                    }
+                }
+            }
+            REQUIRE(opaque > 4000);
+            const int bw = maxx - minx + 1;
+            const int bh = maxy - miny + 1;
+            const double bbox_fill = static_cast<double>(opaque) / static_cast<double>(bw * bh);
+            INFO("species=" << k_species_name[si] << " row=" << row
+                 << " opaque=" << opaque << " bbox=" << bw << "x" << bh
+                 << " bbox_fill=" << bbox_fill);
+            REQUIRE(bbox_fill < 0.72);
+
+            // Anti-grid seal: normalized 2D autocorrelation at the old 4x3 lattice periods
+            // (W/4, 0), (0, W/3), and (W/4, W/3) must be low (no regular grid).
+            const double mean = static_cast<double>(opaque) / static_cast<double>(W * W);
+            double var = 0.0;
+            for (double v : mask) var += (v - mean) * (v - mean);
+            REQUIRE(var > 1.0);
+
+            auto autocorr = [&](int dx, int dy) -> double {
+                double sum = 0.0;
+                for (int y = 0; y + dy < W; ++y) {
+                    for (int x = 0; x + dx < W; ++x) {
+                        sum += (mask[static_cast<size_t>(y) * W + x] - mean)
+                             * (mask[static_cast<size_t>(y + dy) * W + (x + dx)] - mean);
+                    }
+                }
+                return sum / var;
+            };
+            const double ac_x  = autocorr(W / 4, 0);
+            const double ac_y  = autocorr(0, W / 3);
+            const double ac_xy = autocorr(W / 4, W / 3);
+            INFO("species=" << k_species_name[si] << " row=" << row
+                 << " ac(W/4,0)=" << ac_x << " ac(0,H/3)=" << ac_y << " ac(W/4,H/3)=" << ac_xy);
+            REQUIRE(ac_x  < 0.25);
+            REQUIRE(ac_y  < 0.25);
+            REQUIRE(ac_xy < 0.25);
+        }
+    }
+}
+
+// ---- Test 20: Per-leaf tangent normal, albedo & roughness variance on Rows 1..3 ----
+TEST_CASE("[treegen_leaf_atlas_p3] botanical sprigs: non-flat normals, albedo and roughness variance",
+          "[treegen][treegen_leaf_atlas_p3][botanical_sprigs]") {
+    auto a_png = tg::encode_leaf_atlas_png(20u);
+    auto n_png = tg::encode_leaf_normal_png(20u);
+    auto r_png = tg::encode_leaf_roughness_png(20u);
+    auto da = decode_atlas(a_png);
+    auto dn = decode_atlas(n_png);
+    auto dr = decode_atlas(r_png);
+
+    constexpr int W = tg::K_LEAF_CELL_PX;
+    for (int row = tg::K_LEAF_SPRIG_ROW_MIN; row <= tg::K_LEAF_SPRIG_ROW_MAX; ++row) {
+        for (int col = 0; col < tg::K_LEAF_ATLAS_DIM; ++col) {
+            const int x0 = col * W;
+            const int y0 = row * W;
+
+            double sum_nx = 0, sum_nx2 = 0, sum_ny = 0, sum_ny2 = 0;
+            double sum_l  = 0, sum_l2  = 0;
+            double sum_r  = 0, sum_r2  = 0;
+            size_t cnt = 0;
+
+            for (int y = 0; y < W; ++y) {
+                for (int x = 0; x < W; ++x) {
+                    const size_t idx = (static_cast<size_t>(y0 + y) * da.w + (x0 + x)) * 4;
+                    if (da.bytes[idx + 3] < 128) continue;
+                    const double nx = (static_cast<double>(dn.bytes[idx + 0]) / 255.0) * 2.0 - 1.0;
+                    const double ny = (static_cast<double>(dn.bytes[idx + 1]) / 255.0) * 2.0 - 1.0;
+                    const double luma = (0.2126 * da.bytes[idx + 0]
+                                       + 0.7152 * da.bytes[idx + 1]
+                                       + 0.0722 * da.bytes[idx + 2]) / 255.0;
+                    const double rough = static_cast<double>(dr.bytes[idx + 1]) / 255.0;
+                    REQUIRE(rough >= 0.60);
+                    REQUIRE(rough <= 0.90);
+
+                    sum_nx += nx; sum_nx2 += nx * nx;
+                    sum_ny += ny; sum_ny2 += ny * ny;
+                    sum_l  += luma; sum_l2 += luma * luma;
+                    sum_r  += rough; sum_r2 += rough * rough;
+                    ++cnt;
+                }
+            }
+            REQUIRE(cnt > 2000u);
+            const double dcnt = static_cast<double>(cnt);
+            const double std_nx = std::sqrt(std::max(0.0, sum_nx2 / dcnt - (sum_nx / dcnt) * (sum_nx / dcnt)));
+            const double std_ny = std::sqrt(std::max(0.0, sum_ny2 / dcnt - (sum_ny / dcnt) * (sum_ny / dcnt)));
+            const double std_l  = std::sqrt(std::max(0.0, sum_l2  / dcnt - (sum_l  / dcnt) * (sum_l  / dcnt)));
+            const double std_r  = std::sqrt(std::max(0.0, sum_r2  / dcnt - (sum_r  / dcnt) * (sum_r  / dcnt)));
+
+            INFO("cell=(" << row << "," << col << ") std_nx=" << std_nx << " std_ny=" << std_ny
+                 << " std_luma=" << std_l << " std_rough=" << std_r);
+            REQUIRE(std_nx > 0.08);
+            REQUIRE(std_ny > 0.08);
+            REQUIRE(std_l  > 0.025);
+            REQUIRE(std_r  > 0.015);
+        }
+    }
+}
+
+// ---- Test 21: Translucency floor (>= 15 / 0.058) & 4-px dilation seal -------
+TEST_CASE("[treegen_leaf_atlas_p3] translucency floor >= 15 on opaque pixels and 4-px edge dilation",
+          "[treegen][treegen_leaf_atlas_p3][botanical_sprigs]") {
+    auto a_png = tg::encode_leaf_atlas_png(21u);
+    auto t_png = tg::encode_leaf_translucency_png(21u);
+    auto da = decode_atlas(a_png);
+    auto dt = decode_atlas(t_png);
+
+    constexpr int W = tg::K_LEAF_CELL_PX;
+    constexpr int pad = tg::K_LEAF_CELL_PAD_PX;
+
+    int opaque_below_floor = 0;
+    int near_edge_zero_trans = 0;
+
+    for (int row = 0; row < tg::K_LEAF_ATLAS_DIM; ++row) {
+        for (int col = 0; col < tg::K_LEAF_ATLAS_DIM; ++col) {
+            const int x0 = col * W;
+            const int y0 = row * W;
+            for (int y = pad; y < W - pad; ++y) {
+                for (int x = pad; x < W - pad; ++x) {
+                    const size_t idx = (static_cast<size_t>(y0 + y) * da.w + (x0 + x)) * 4;
+                    const uint8_t alpha = da.bytes[idx + 3];
+                    const uint8_t trans = dt.bytes[idx + 0];
+                    if (alpha >= 128) {
+                        if (trans < 15) ++opaque_below_floor;
+                    } else {
+                        // Check if any opaque pixel lies within 4-px Chebyshev distance inside usable rect.
+                        bool near_opaque = false;
+                        const int ny0 = std::max(pad, y - 4);
+                        const int ny1 = std::min(W - pad - 1, y + 4);
+                        const int nx0 = std::max(pad, x - 4);
+                        const int nx1 = std::min(W - pad - 1, x + 4);
+                        for (int ny = ny0; ny <= ny1 && !near_opaque; ++ny) {
+                            for (int nx = nx0; nx <= nx1; ++nx) {
+                                if (da.bytes[(static_cast<size_t>(y0 + ny) * da.w + (x0 + nx)) * 4 + 3] >= 128) {
+                                    near_opaque = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if (near_opaque && trans == 0) ++near_edge_zero_trans;
+                    }
+                }
+            }
+        }
+    }
+    INFO("opaque_below_floor=" << opaque_below_floor << " near_edge_zero_trans=" << near_edge_zero_trans);
+    REQUIRE(opaque_below_floor == 0);
+    REQUIRE(near_edge_zero_trans == 0);
+}
+
+// ---- Test 22: Strict seed-independence across all 4 atlas encoders ----------
+TEST_CASE("[treegen_leaf_atlas_p3] all 4 atlas encoders are strictly seed-independent",
+          "[treegen][treegen_leaf_atlas_p3][botanical_sprigs]") {
+    REQUIRE(tg::encode_leaf_atlas_png(1u)        == tg::encode_leaf_atlas_png(0xDEADBEEF12345678ULL));
+    REQUIRE(tg::encode_leaf_normal_png(1u)       == tg::encode_leaf_normal_png(0xDEADBEEF12345678ULL));
+    REQUIRE(tg::encode_leaf_translucency_png(1u) == tg::encode_leaf_translucency_png(0xDEADBEEF12345678ULL));
+    REQUIRE(tg::encode_leaf_roughness_png(1u)    == tg::encode_leaf_roughness_png(0xDEADBEEF12345678ULL));
 }

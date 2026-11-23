@@ -63,17 +63,24 @@ namespace treegen {
         };
     }
 
-    // C3 P1 — multi-leaf cluster-card cells live in row 2, one per species at
-    // the same column as its single-leaf cell (row 0). Each cell holds N baked
-    // leaves; a single ClusterCard samples the whole cell to read as a cluster.
-    inline constexpr int K_LEAF_CLUSTER_CELL_ROW = 2;
+    // C3 P1 -> Botanical Sprig Uplift: rows 1..3 hold 3 distinct botanical sprig
+    // variants per species at the same column as its single-leaf cell (row 0):
+    //   Row 1: Var A (forked terminal fan shoot; pine = V-tileable fascicle shoot)
+    //   Row 2: Var B (curved alternating/opposite lateral shoot; default cluster row)
+    //   Row 3: Var C (open dappled twiglet with interior sky pockets; pine = candle tuft)
+    inline constexpr int K_LEAF_SPRIG_ROW_MIN     = 1;
+    inline constexpr int K_LEAF_SPRIG_ROW_MAX     = 3;
+    inline constexpr int K_LEAF_CLUSTER_CELL_ROW  = 2;
+    inline constexpr int K_LEAF_SPRIG_RECESS_PX   = 16;
+    inline constexpr int K_LEAF_SPRIG_CORNER_PX   = 32;
     constexpr int leaf_cluster_cell_col(LeafShape s) { return leaf_atlas_cell_col(s); }
 
-    // Map cluster-card local coords ([-1, 1] half-extent, +Y apex) to the
-    // cluster cell's atlas UV. Mirror of `tile_uv` with the row pinned to the
-    // cluster row — the ClusterCard emitter and the cluster bake share this so
-    // per-vert UVs and the baked cell rectangle cannot drift apart.
-    constexpr vec2 cluster_tile_uv(LeafShape s, float lx, float ly) {
+    // Map sprig-card local coords ([-1, 1] half-extent, +Y apex) to the chosen
+    // variant row (1..3) atlas UV.
+    constexpr vec2 sprig_tile_uv(LeafShape s, int variant_row, float lx, float ly) {
+        const int   row          = (variant_row < K_LEAF_SPRIG_ROW_MIN)
+                                 ? K_LEAF_SPRIG_ROW_MIN
+                                 : (variant_row > K_LEAF_SPRIG_ROW_MAX ? K_LEAF_SPRIG_ROW_MAX : variant_row);
         const int   col          = leaf_cluster_cell_col(s);
         const float cell_size_uv = 1.0f / static_cast<float>(K_LEAF_ATLAS_DIM);
         const float pad_uv       = static_cast<float>(K_LEAF_CELL_PAD_PX)
@@ -83,8 +90,14 @@ namespace treegen {
         const float v_local      = 0.5f * (1.0f - ly);
         return vec2{
             static_cast<float>(col) * cell_size_uv + pad_uv + u_local * usable_uv,
-            static_cast<float>(K_LEAF_CLUSTER_CELL_ROW) * cell_size_uv + pad_uv + v_local * usable_uv,
+            static_cast<float>(row) * cell_size_uv + pad_uv + v_local * usable_uv,
         };
+    }
+
+    // Map cluster-card local coords ([-1, 1] half-extent, +Y apex) to the
+    // default cluster cell's atlas UV (row 2).
+    constexpr vec2 cluster_tile_uv(LeafShape s, float lx, float ly) {
+        return sprig_tile_uv(s, K_LEAF_CLUSTER_CELL_ROW, lx, ly);
     }
 
     // Needle-strip atlas cell: row=1, col=1 (cell index 5).
@@ -104,21 +117,23 @@ namespace treegen {
         };
     }
 
-    // ----- Atlas encoders --------------------------------------------------
-    // P3a — alpha + diffuse (RGBA8 1024×1024, RGB = species diffuse, A = mask).
-    // `cluster_cell_grid`: leaf slots (x, y) of the cluster cell (row 2); the
-    // translucency encoder must be given the same grid so its mask agrees.
+    // ----- Atlas encoders (strictly seed-independent!) ---------------------
+    // All 4 encoders ignore `seed` so all staged GLBs deduplicate to one atlas.
+    // `cluster_cell_grid`: default [4, 3] emits full botanical sprigs; non-default
+    // [nx, ny] scales leaf blade radius deterministically for sweep overrides.
     std::vector<uint8_t> encode_leaf_atlas_png(
         uint64_t seed, const std::array<int, 2>& cluster_cell_grid = k_default_cluster_cell_grid);
 
-    // P3b — tangent-space normal (RGBA8: RGB = normal*0.5+0.5, A=255).
-    std::vector<uint8_t> encode_leaf_normal_png(uint64_t seed);
+    // Tangent-space normal (RGBA8: RGB = normal*0.5+0.5, A=255).
+    std::vector<uint8_t> encode_leaf_normal_png(
+        uint64_t seed, const std::array<int, 2>& cluster_cell_grid = k_default_cluster_cell_grid);
 
-    // P3b — translucency (RGBA8: R = trans, GB = 0, A=255).
+    // Translucency (RGBA8: R = trans >= 0.05 on all alpha>0, GB = 0, A=255).
     std::vector<uint8_t> encode_leaf_translucency_png(
         uint64_t seed, const std::array<int, 2>& cluster_cell_grid = k_default_cluster_cell_grid);
 
-    // C3 P2 — roughness (RGBA8: R = roughness, GB = 0, A=255).
-    std::vector<uint8_t> encode_leaf_roughness_png(uint64_t seed);
+    // Roughness (glTF MR RGBA8: R = 255, G = roughness, B = 0, A = 255).
+    std::vector<uint8_t> encode_leaf_roughness_png(
+        uint64_t seed, const std::array<int, 2>& cluster_cell_grid = k_default_cluster_cell_grid);
 
 }

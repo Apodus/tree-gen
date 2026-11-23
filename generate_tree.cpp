@@ -119,9 +119,9 @@ GeneratedTree generate_tree(const Scenario& s, uint64_t cli_seed) {
         const auto& grid = s.tree.leaves.cluster_cell_grid;
         ImageData ld, ln, lt, lr;
         ld.png_bytes = encode_leaf_atlas_png(seed_effective, grid);
-        ln.png_bytes = encode_leaf_normal_png(seed_effective);
+        ln.png_bytes = encode_leaf_normal_png(seed_effective, grid);
         lt.png_bytes = encode_leaf_translucency_png(seed_effective, grid);
-        lr.png_bytes = encode_leaf_roughness_png(seed_effective);
+        lr.png_bytes = encode_leaf_roughness_png(seed_effective, grid);
         g.images.push_back(std::move(ld));  // index 4
         g.images.push_back(std::move(ln));  // index 5
         g.images.push_back(std::move(lt));  // index 6

@@ -56,6 +56,9 @@ void splat_leaves(const Probe& probe, vec3 origin, float cell, int nx, int ny, i
     const double inv_vol = 1.0 / (double(cell) * double(cell) * double(cell));
     std::vector<double> acc(out_c.size(), 0.0);
 
+    struct Sample { float b1, b2; };
+    std::vector<Sample> samples;
+
     for (uint32_t ti = 0; ti < m.triangles.size(); ++ti) {
         const Triangle& t = m.triangles[ti];
         if (t.site < 0) continue;
@@ -79,8 +82,7 @@ void splat_leaves(const Probe& probe, vec3 origin, float cell, int nx, int ny, i
         const int s = std::max(s_min, static_cast<int>(std::ceil(max_edge / (0.25f * cell))));
         const double nx_d = double(nrm.x), ny_d = double(nrm.y), nz_d = double(nrm.z);
 
-        struct Sample { float b1, b2; };
-        std::vector<Sample> samples;
+        samples.clear();
         samples.reserve(static_cast<size_t>(s) * static_cast<size_t>(s));
         const float inv_s = 1.0f / static_cast<float>(s);
         auto consider = [&](float b1, float b2) {

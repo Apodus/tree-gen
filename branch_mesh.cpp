@@ -150,20 +150,19 @@ BarkMeshOutput build_bark_mesh(const TreeSkeleton& skel, const BarkMeshOptions& 
     std::vector<float> node_cum_dist_m(static_cast<size_t>(node_count), 0.0f);
 
     for (int i = 1; i < node_count; ++i) {
-        // Per-node merge mask (face_budget's merge-by-length overflow rule).
-        if (!opts.culled_node_mask.empty() && opts.culled_node_mask[size_t(i)]) continue;
-
         const auto& node = skel.nodes[i];
         if (node.parent_index < 0) continue;
         const auto& parent = skel.nodes[static_cast<size_t>(node.parent_index)];
 
         const vec3 raw = node.position - parent.position;
         const float seg_len = length(raw);
-        if (seg_len < 1e-5f) continue; // skip degenerate segment
-        const vec3 seg_dir = raw / seg_len;
-
         const float base_dist_m = node_cum_dist_m[static_cast<size_t>(node.parent_index)];
         node_cum_dist_m[static_cast<size_t>(i)] = base_dist_m + seg_len;
+
+        // Per-node merge mask (face_budget's merge-by-length overflow rule).
+        if (!opts.culled_node_mask.empty() && opts.culled_node_mask[size_t(i)]) continue;
+        if (seg_len < 1e-5f) continue; // skip degenerate segment
+        const vec3 seg_dir = raw / seg_len;
 
         const int axial_segs = std::max(1, static_cast<int>(std::floor(seg_len / opts.axial_segment_length_m)));
         int N = radial_for_depth(static_cast<int>(node.depth), opts);

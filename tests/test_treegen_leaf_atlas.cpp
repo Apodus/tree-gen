@@ -855,10 +855,10 @@ TEST_CASE("[treegen_leaf_atlas_p3] botanical sprigs: empty corners, recessed, bb
                 for (int x = 0; x < W; ++x) {
                     const uint8_t a = d.bytes[((y0 + y) * d.w + (x0 + x)) * 4 + 3];
                     const bool in_recess = (x < R || x >= W - R || y < R || y >= W - R);
-                    const bool in_corner = (x + y < C) ||
-                                           ((W - 1 - x) + y < C) ||
-                                           (x + (W - 1 - y) < C) ||
-                                           ((W - 1 - x) + (W - 1 - y) < C);
+                    const bool in_corner = (x < C && y < C) ||
+                                           (x >= W - C && y < C) ||
+                                           (x < C && y >= W - C) ||
+                                           (x >= W - C && y >= W - C);
                     if (in_recess || in_corner) {
                         INFO("species=" << k_species_name[si] << " row=" << row
                              << " px=(" << x << "," << y << ") alpha=" << int(a));
@@ -1019,11 +1019,72 @@ TEST_CASE("[treegen_leaf_atlas_p3] translucency floor >= 15 on opaque pixels and
     REQUIRE(near_edge_zero_trans == 0);
 }
 
-// ---- Test 22: Strict seed-independence across all 4 atlas encoders ----------
+// ---- Test 22: Strict seed-independence + single-pass bundle parity ----------
 TEST_CASE("[treegen_leaf_atlas_p3] all 4 atlas encoders are strictly seed-independent",
           "[treegen][treegen_leaf_atlas_p3][botanical_sprigs]") {
-    REQUIRE(tg::encode_leaf_atlas_png(1u)        == tg::encode_leaf_atlas_png(0xDEADBEEF12345678ULL));
-    REQUIRE(tg::encode_leaf_normal_png(1u)       == tg::encode_leaf_normal_png(0xDEADBEEF12345678ULL));
-    REQUIRE(tg::encode_leaf_translucency_png(1u) == tg::encode_leaf_translucency_png(0xDEADBEEF12345678ULL));
-    REQUIRE(tg::encode_leaf_roughness_png(1u)    == tg::encode_leaf_roughness_png(0xDEADBEEF12345678ULL));
+    const auto a = tg::encode_leaf_atlas_png(1u);
+    const auto n = tg::encode_leaf_normal_png(1u);
+    const auto t = tg::encode_leaf_translucency_png(1u);
+    const auto r = tg::encode_leaf_roughness_png(1u);
+    REQUIRE(a == tg::encode_leaf_atlas_png(0xDEADBEEF12345678ULL));
+    REQUIRE(n == tg::encode_leaf_normal_png(0xDEADBEEF12345678ULL));
+    REQUIRE(t == tg::encode_leaf_translucency_png(0xDEADBEEF12345678ULL));
+    REQUIRE(r == tg::encode_leaf_roughness_png(0xDEADBEEF12345678ULL));
+
+    const auto bundle = tg::encode_leaf_bundle_pngs(42u);
+    REQUIRE(bundle.albedo_png       == a);
+    REQUIRE(bundle.normal_png       == n);
+    REQUIRE(bundle.translucency_png == t);
+    REQUIRE(bundle.roughness_png    == r);
+}
+
+// ---- Test 23: OpenGL +Y_up normal sign-convention seal (convex dome, not saddle)
+TEST_CASE("[treegen_leaf_atlas_p3] sprig normal map uses OpenGL +Y_up (+B = -dP/dV) convex dome sign",
+          "[treegen][treegen_leaf_atlas_p3][botanical_sprigs]") {
+    const auto bundle = tg::encode_leaf_bundle_pngs(23u);
+    auto da = decode_atlas(bundle.albedo_png);
+    auto dn = decode_atlas(bundle.normal_png);
+
+    constexpr int W = tg::K_LEAF_CELL_PX;
+    constexpr int half = W / 2;
+
+    // Across all 9 broadleaf sprig cells (rows 1..3 x {Oak, Birch, Maple}), upper
+    // foliage points outward along +B (-y_px -> ny > 0, G > 128), lower foliage
+    // points along -B (+y_px -> ny < 0, G < 128), right along +T (nx > 0), left along -T (nx < 0).
+    for (tg::LeafShape sp : {tg::LeafShape::OakLobed, tg::LeafShape::BirchSerrated, tg::LeafShape::MapleStar}) {
+        const int col = tg::leaf_cluster_cell_col(sp);
+        double up_ny = 0.0, dn_ny = 0.0, rt_nx = 0.0, lt_nx = 0.0;
+        size_t up_c = 0, dn_c = 0, rt_c = 0, lt_c = 0;
+
+        for (int row = tg::K_LEAF_SPRIG_ROW_MIN; row <= tg::K_LEAF_SPRIG_ROW_MAX; ++row) {
+            const int x0 = col * W;
+            const int y0 = row * W;
+            for (int y = 0; y < W; ++y) {
+                for (int x = 0; x < W; ++x) {
+                    const size_t idx = (static_cast<size_t>(y0 + y) * da.w + (x0 + x)) * 4;
+                    if (da.bytes[idx + 3] < 128) continue;
+                    const double nx = (static_cast<double>(dn.bytes[idx + 0]) / 255.0) * 2.0 - 1.0;
+                    const double ny = (static_cast<double>(dn.bytes[idx + 1]) / 255.0) * 2.0 - 1.0;
+                    if (y < half - 24)      { up_ny += ny; ++up_c; }
+                    else if (y > half + 24) { dn_ny += ny; ++dn_c; }
+                    if (x > half + 24)      { rt_nx += nx; ++rt_c; }
+                    else if (x < half - 24) { lt_nx += nx; ++lt_c; }
+                }
+            }
+        }
+        REQUIRE(up_c > 1000u);
+        REQUIRE(dn_c > 1000u);
+        REQUIRE(rt_c > 1000u);
+        REQUIRE(lt_c > 1000u);
+        const double mean_up = up_ny / static_cast<double>(up_c);
+        const double mean_dn = dn_ny / static_cast<double>(dn_c);
+        const double mean_rt = rt_nx / static_cast<double>(rt_c);
+        const double mean_lt = lt_nx / static_cast<double>(lt_c);
+        INFO("col=" << col << " mean_up_ny=" << mean_up << " mean_dn_ny=" << mean_dn
+             << " mean_rt_nx=" << mean_rt << " mean_lt_nx=" << mean_lt);
+        REQUIRE(mean_up >  0.05);
+        REQUIRE(mean_dn < -0.05);
+        REQUIRE(mean_rt >  0.05);
+        REQUIRE(mean_lt < -0.05);
+    }
 }

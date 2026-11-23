@@ -157,9 +157,11 @@ TEST_CASE("[treegen_branch_mesh_p1] Bark B-1 monotonic cumulative v_axial and co
     std::vector<bool>  has_branch(skel.nodes.size(), false);
     int merged_joints_checked = 0;
     int collar_rings_checked  = 0;
+    float global_max_v        = 0.0f;
 
     for (const auto& rm : bark.ring_metadata) {
         const float v = bark.mesh.uvs[size_t(rm.vert_start) * 2 + 1];
+        global_max_v = std::max(global_max_v, v);
         if (rm.collar_fork_node >= 0) {
             ++collar_rings_checked;
             // Collar ring v_axial must sit strictly above its parent fork's min v (not reset to 0).
@@ -171,7 +173,7 @@ TEST_CASE("[treegen_branch_mesh_p1] Bark B-1 monotonic cumulative v_axial and co
         const size_t bi = size_t(rm.branch_node_index);
         if (has_branch[bi]) {
             // Within a branch, consecutive rings are emitted in ascending s -> v strictly increases.
-            CHECK(v > max_v_for_branch[bi] - 1e-5f);
+            CHECK(v > max_v_for_branch[bi] + 1e-5f);
         }
         min_v_for_branch[bi] = std::min(min_v_for_branch[bi], v);
         max_v_for_branch[bi] = std::max(max_v_for_branch[bi], v);
@@ -188,4 +190,6 @@ TEST_CASE("[treegen_branch_mesh_p1] Bark B-1 monotonic cumulative v_axial and co
     }
     REQUIRE(merged_joints_checked > 50);
     REQUIRE(collar_rings_checked > 10);
+    // Non-tautological cumulative extent seal: kills flat v_axial = 0 regressions.
+    REQUIRE(global_max_v >= s.tree.height_m * 0.5f / opts.bark_repeat_m);
 }

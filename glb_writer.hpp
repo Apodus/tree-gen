@@ -46,7 +46,7 @@ struct MaterialSpec {
     int occlusion_tex_index          = -1;  // occlusionTexture.index
     int metallic_roughness_tex_index = -1;  // pbrMetallicRoughness.metallicRoughnessTexture.index
     int translucency_tex_index       = -1;  // extensions._RYNX_LEAF_TRANSLUCENCY.translucencyTexture.index
-    int sampler_index                = 0;   // 0=bark REPEAT/CLAMP, 1=leaf CLAMP/CLAMP
+    int sampler_index                = 0;   // 0=bark REPEAT/REPEAT, 1=leaf CLAMP/CLAMP
 };
 
 // C6 P4 — embedded image data (PNG bytes + MIME type).
@@ -507,9 +507,10 @@ inline std::string build_json_multi_mesh(
 
     // C6 P4 — samplers + textures (after materials, before meshes).
     if (has_textures) {
-        // Two samplers: 0 = bark (REPEAT U, CLAMP V), 1 = leaf (CLAMP U+V).
+        // Two samplers: 0 = bark (REPEAT U+V for periodic 2D torus + cumulative v_axial),
+        //               1 = leaf (CLAMP U+V).
         j += R"(,"samplers":[)";
-        j += R"({"magFilter":9729,"minFilter":9987,"wrapS":10497,"wrapT":33071})";
+        j += R"({"magFilter":9729,"minFilter":9987,"wrapS":10497,"wrapT":10497})";
         j += R"(,{"magFilter":9729,"minFilter":9987,"wrapS":33071,"wrapT":33071})";
         j += ']';
         // textures[] — one entry per image, each referencing its sampler via

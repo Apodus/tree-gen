@@ -875,6 +875,9 @@ TEST_CASE("treegen_leaf_geometry: ClusterCard emits 3x4-vert sprig bouquet with 
         REQUIRE(treegen::dot(card_normals[1], card_normals[2]) < 0.90f);
         REQUIRE(treegen::dot(card_normals[2], card_normals[0]) < 0.90f);
     }
+    // Both U-mirror TBN handedness arms (tw == -1.0f and tw == +1.0f) must execute.
+    REQUIRE(mirrored_cards > 0);
+    REQUIRE(unmirrored_cards > 0);
 
     // Hard cone tilt cap <= 42 deg enforced even if caller requests larger tilt.
     opts.bend_half_angle = 1.3f;  // ~74 deg -> must clamp to 42 deg

@@ -17,6 +17,7 @@
 
 #include <array>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <set>
 #include <string>
@@ -36,10 +37,10 @@ struct GlbRow {
 // - Alpha-localized F2_tensor Option 2A crown volume (clumping = 0.93 / 1.05)
 // - Periodic 2D torus species-morphology bark (oak/pine/birch/maple) + cumulative V + dedup
 constexpr std::array<GlbRow, 4> k_glb_table = {{
-    {"oak",   42, 6416776, 0xca83e2dd3671de00ull},
-    {"maple", 42, 7340644, 0x8e9e9d063c73dccbull},
-    {"birch", 42, 5638240, 0x5e5f6fcbb32e4bedull},
-    {"pine",  42, 5236312, 0xc41e5e38e54f0252ull},
+    {"oak",   42, 6162456, 0x6b705a0e5f86eb27ull},
+    {"maple", 42, 7110308, 0xbde27da78c1951f5ull},
+    {"birch", 42, 5369832, 0x06624c0b181622efull},
+    {"pine",  42, 5008008, 0x665f1ce49854b3acull},
 }};
 
 uint64_t glb_fnv(const std::vector<uint8_t>& b) {
@@ -92,4 +93,34 @@ TEST_CASE("[treegen_generate_tree] species registry path equals the scenario pat
         REQUIRE_FALSE(via_registry.empty());
         CHECK(std::filesystem::equivalent(via_registry, tsp::treegen_file("scenarios/c3_" + name + ".json")));
     }
+}
+
+TEST_CASE("[treegen_generate_tree] cross-seed bark/leaf image dedup and bark sampler REPEAT U+V",
+          "[treegen][treegen_generate_tree][treegen_bark_b1]") {
+    namespace tsp = rynx::test_support;
+    const treegen::GeneratedTree& g42  = tsp::generated_tree("oak", 42);
+    const treegen::GeneratedTree& g123 = tsp::generated_tree("oak", 123);
+
+    // Same species across seeds produces byte-identical bark (0..3) and leaf (4..7) PNGs.
+    REQUIRE(g42.images.size()  == 8u);
+    REQUIRE(g123.images.size() == 8u);
+    for (size_t i = 0; i < 8u; ++i) {
+        INFO("image index " << i);
+        REQUIRE(g42.images[i].png_bytes == g123.images[i].png_bytes);
+    }
+
+    // Per-tree geometry & seam_offset_rad UVs still differ across seeds.
+    REQUIRE(!g42.lods.empty());
+    REQUIRE(!g123.lods.empty());
+    REQUIRE(g42.lods[0].mesh.uvs != g123.lods[0].mesh.uvs);
+
+    // GLB JSON chunk pins Bark Sampler 0 to REPEAT U+V (wrapS=10497, wrapT=10497)
+    // for the periodic 2D torus bark maps + cumulative root-to-tip v_axial.
+    REQUIRE(g42.glb.size() > 20u);
+    uint32_t json_len = 0;
+    std::memcpy(&json_len, g42.glb.data() + 12, 4);
+    REQUIRE(20u + json_len <= g42.glb.size());
+    const std::string_view json_sv(reinterpret_cast<const char*>(g42.glb.data() + 20), json_len);
+    REQUIRE(json_sv.find(R"("samplers":[{"magFilter":9729,"minFilter":9987,"wrapS":10497,"wrapT":10497})")
+            != std::string_view::npos);
 }

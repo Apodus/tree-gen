@@ -51,6 +51,74 @@ TEST_CASE("[treegen_bark_oak_p1] png round trip 4x4 RGBA8 buffer",
     REQUIRE(byte_equal);
 }
 
+TEST_CASE("[treegen_bark_b1] RGB8 and Gray8 PNG lossless round-trip and bark bundle decode parity",
+          "[treegen][treegen_bark_b1]") {
+    // 1. Synthetic RGB8 -> stbi_load_from_memory(..., 4) expands to (R, G, B, 255).
+    {
+        constexpr int W = 4, H = 4;
+        std::vector<uint8_t> rgb(W * H * 3);
+        for (int i = 0; i < W * H; ++i) {
+            rgb[i * 3 + 0] = 255;
+            rgb[i * 3 + 1] = static_cast<uint8_t>((i * 19 + 7) & 0xFF);
+            rgb[i * 3 + 2] = 0;
+        }
+        auto png = tg::encode_png_rgb8(W, H, W * 3, rgb.data());
+        REQUIRE(!png.empty());
+        int dw = 0, dh = 0, dch = 0;
+        unsigned char* dec = stbi_load_from_memory(png.data(), int(png.size()), &dw, &dh, &dch, 4);
+        REQUIRE(dec != nullptr);
+        REQUIRE(dw == W);
+        REQUIRE(dh == H);
+        REQUIRE(dch == 3);
+        for (int i = 0; i < W * H; ++i) {
+            REQUIRE(dec[i * 4 + 0] == rgb[i * 3 + 0]);
+            REQUIRE(dec[i * 4 + 1] == rgb[i * 3 + 1]);
+            REQUIRE(dec[i * 4 + 2] == rgb[i * 3 + 2]);
+            REQUIRE(dec[i * 4 + 3] == 255);
+        }
+        stbi_image_free(dec);
+    }
+
+    // 2. Synthetic Gray8 -> stbi_load_from_memory(..., 4) expands to (G, G, G, 255).
+    {
+        constexpr int W = 4, H = 4;
+        std::vector<uint8_t> gray(W * H);
+        for (int i = 0; i < W * H; ++i) gray[i] = static_cast<uint8_t>((i * 29 + 11) & 0xFF);
+        auto png = tg::encode_png_gray8(W, H, W, gray.data());
+        REQUIRE(!png.empty());
+        int dw = 0, dh = 0, dch = 0;
+        unsigned char* dec = stbi_load_from_memory(png.data(), int(png.size()), &dw, &dh, &dch, 4);
+        REQUIRE(dec != nullptr);
+        REQUIRE(dw == W);
+        REQUIRE(dh == H);
+        REQUIRE(dch == 1);
+        for (int i = 0; i < W * H; ++i) {
+            REQUIRE(dec[i * 4 + 0] == gray[i]);
+            REQUIRE(dec[i * 4 + 1] == gray[i]);
+            REQUIRE(dec[i * 4 + 2] == gray[i]);
+            REQUIRE(dec[i * 4 + 3] == 255);
+        }
+        stbi_image_free(dec);
+    }
+
+    // 3. All 4 maps of encode_bark_bundle_pngs decode via stbi(..., 4) bit-exact to bake_bark_*.
+    auto verify_decoded_eq = [](const std::vector<uint8_t>& png, const std::vector<uint8_t>& expected_rgba) {
+        int dw = 0, dh = 0, dch = 0;
+        unsigned char* dec = stbi_load_from_memory(png.data(), int(png.size()), &dw, &dh, &dch, 4);
+        REQUIRE(dec != nullptr);
+        REQUIRE(dw == tg::K_BARK_TEX_W);
+        REQUIRE(dh == tg::K_BARK_TEX_H);
+        const bool ok = std::equal(expected_rgba.begin(), expected_rgba.end(), dec);
+        stbi_image_free(dec);
+        REQUIRE(ok);
+    };
+    const auto bundle = tg::encode_bark_bundle_pngs(tg::LeafShape::OakLobed, 0ULL);
+    verify_decoded_eq(bundle.diffuse_png,   tg::bake_bark_diffuse  (tg::LeafShape::OakLobed, 0ULL));
+    verify_decoded_eq(bundle.normal_png,    tg::bake_bark_normal   (tg::LeafShape::OakLobed, 0ULL));
+    verify_decoded_eq(bundle.ao_png,        tg::bake_bark_ao       (tg::LeafShape::OakLobed, 0ULL));
+    verify_decoded_eq(bundle.roughness_png, tg::bake_bark_roughness(tg::LeafShape::OakLobed, 0ULL));
+}
+
 TEST_CASE("[treegen_bark_oak_p1] oak color mean within sRGB-corrected bounds",
           "[treegen][treegen_bark_oak_p1]") {
     auto img = tg::bake_bark_diffuse(tg::LeafShape::OakLobed, 1u);
@@ -487,30 +555,55 @@ TEST_CASE("[treegen_bark_b1] exact U and V torus wrap continuity across all 4 sp
     auto check_wrap = [&](const char* sp_name, const char* map_name, const std::vector<uint8_t>& img,
                           double max_mean_abs, double max_p95_abs) {
         REQUIRE(img.size() == size_t(W) * H * 4);
-        // Compare col 0 vs col W-1 (1-px step across U wrap) against interior 1-px step (col 0 vs col 1).
-        std::vector<double> u_seam, u_int;
+        // Compare col 0 vs col W-1 (1-px step across U wrap) against BOTH its immediate
+        // adjacent interior steps (col 0->1 and col W-2->W-1) and the global interior
+        // distribution (16 evenly spaced columns). Comparing against max(local_adj, global)
+        // prevents false positives when a real bark ridge/lenticel straddles x=0 or y=0,
+        // while staying ultra-strict against any real periodicity discontinuity.
+        std::vector<double> u_seam, u_adj, u_glob;
         u_seam.reserve(size_t(H) * 3);
-        u_int.reserve(size_t(H) * 3);
+        u_adj.reserve(size_t(H) * 6);
+        u_glob.reserve(size_t(H) * 16 * 3);
         for (int y = 0; y < H; ++y) {
             for (int c = 0; c < 3; ++c) {
-                const double v0   = img[(size_t(y) * W + 0)     * 4 + c];
-                const double v1   = img[(size_t(y) * W + 1)     * 4 + c];
-                const double vlast = img[(size_t(y) * W + W - 1) * 4 + c];
+                const double v0     = img[(size_t(y) * W + 0)     * 4 + c];
+                const double v1     = img[(size_t(y) * W + 1)     * 4 + c];
+                const double vm2    = img[(size_t(y) * W + W - 2) * 4 + c];
+                const double vlast  = img[(size_t(y) * W + W - 1) * 4 + c];
                 u_seam.push_back(std::abs(v0 - vlast));
-                u_int.push_back(std::abs(v0 - v1));
+                u_adj.push_back(std::abs(v0 - v1));
+                u_adj.push_back(std::abs(vlast - vm2));
+            }
+            for (int sx = 0; sx < 16; ++sx) {
+                const int x = sx * (W / 16);
+                for (int c = 0; c < 3; ++c) {
+                    const double a = img[(size_t(y) * W + x)     * 4 + c];
+                    const double b = img[(size_t(y) * W + x + 1) * 4 + c];
+                    u_glob.push_back(std::abs(a - b));
+                }
             }
         }
-        // Compare row 0 vs row H-1 (1-px step across V wrap) against interior 1-px step (row 0 vs row 1).
-        std::vector<double> v_seam, v_int;
+        std::vector<double> v_seam, v_adj, v_glob;
         v_seam.reserve(size_t(W) * 3);
-        v_int.reserve(size_t(W) * 3);
+        v_adj.reserve(size_t(W) * 6);
+        v_glob.reserve(size_t(W) * 16 * 3);
         for (int x = 0; x < W; ++x) {
             for (int c = 0; c < 3; ++c) {
                 const double v0    = img[(size_t(0)     * W + x) * 4 + c];
                 const double v1    = img[(size_t(1)     * W + x) * 4 + c];
+                const double vm2   = img[(size_t(H - 2) * W + x) * 4 + c];
                 const double vlast = img[(size_t(H - 1) * W + x) * 4 + c];
                 v_seam.push_back(std::abs(v0 - vlast));
-                v_int.push_back(std::abs(v0 - v1));
+                v_adj.push_back(std::abs(v0 - v1));
+                v_adj.push_back(std::abs(vlast - vm2));
+            }
+            for (int sy = 0; sy < 16; ++sy) {
+                const int y = sy * (H / 16);
+                for (int c = 0; c < 3; ++c) {
+                    const double a = img[(size_t(y)     * W + x) * 4 + c];
+                    const double b = img[(size_t(y + 1) * W + x) * 4 + c];
+                    v_glob.push_back(std::abs(a - b));
+                }
             }
         }
         auto stats = [](std::vector<double>& a) -> std::pair<double, double> {
@@ -519,30 +612,36 @@ TEST_CASE("[treegen_bark_b1] exact U and V torus wrap continuity across all 4 sp
             std::sort(a.begin(), a.end());
             return { s / static_cast<double>(a.size()), a[(a.size() * 95) / 100] };
         };
-        auto [um, up95] = stats(u_seam);
-        auto [uim, uip95] = stats(u_int);
-        auto [vm, vp95] = stats(v_seam);
-        auto [vim, vip95] = stats(v_int);
+        auto [um, up95]   = stats(u_seam);
+        auto [uam, uap95] = stats(u_adj);
+        auto [ugm, ugp95] = stats(u_glob);
+        auto [vm, vp95]   = stats(v_seam);
+        auto [vam, vap95] = stats(v_adj);
+        auto [vgm, vgp95] = stats(v_glob);
+        const double u_ref_m   = std::max(uam, ugm);
+        const double u_ref_p95 = std::max(uap95, ugp95);
+        const double v_ref_m   = std::max(vam, vgm);
+        const double v_ref_p95 = std::max(vap95, vgp95);
         INFO(sp_name << " " << map_name
-             << " U_seam_mean=" << um << " (int=" << uim << ") p95=" << up95 << " (int=" << uip95 << ")"
-             << " V_seam_mean=" << vm << " (int=" << vim << ") p95=" << vp95 << " (int=" << vip95 << ")");
+             << " U_seam_mean=" << um << " (ref=" << u_ref_m << ") p95=" << up95 << " (ref=" << u_ref_p95 << ")"
+             << " V_seam_mean=" << vm << " (ref=" << v_ref_m << ") p95=" << vp95 << " (ref=" << v_ref_p95 << ")");
         CHECK(um <= max_mean_abs);
         CHECK(vm <= max_mean_abs);
         // Seam gradient statistics (both mean and p95) must match interior 1-px gradient statistics.
-        CHECK(um <= uim * 1.4 + 1.5);
-        CHECK(vm <= vim * 1.4 + 1.5);
-        CHECK(up95 <= uip95 * 1.5 + 4.0);
-        CHECK(vp95 <= vip95 * 1.5 + 4.0);
-        (void)max_p95_abs;
+        CHECK(um <= u_ref_m * 1.4 + 1.5);
+        CHECK(vm <= v_ref_m * 1.4 + 1.5);
+        CHECK(up95 <= u_ref_p95 * 1.5 + 4.0);
+        CHECK(vp95 <= v_ref_p95 * 1.5 + 4.0);
+        CHECK(up95 <= max_p95_abs);
+        CHECK(vp95 <= max_p95_abs);
     };
 
     for (size_t s = 0; s < k_species.size(); ++s) {
         const auto sp = k_species[s];
-        const uint64_t seed = tg::species_fnv_name(sp);
-        check_wrap(k_species_name[s], "diffuse",   tg::bake_bark_diffuse(sp, seed),   16.0, 60.0);
-        check_wrap(k_species_name[s], "normal",    tg::bake_bark_normal(sp, seed),    20.0, 65.0);
-        check_wrap(k_species_name[s], "ao",        tg::bake_bark_ao(sp, seed),        16.0, 65.0);
-        check_wrap(k_species_name[s], "roughness", tg::bake_bark_roughness(sp, seed), 14.0, 50.0);
+        check_wrap(k_species_name[s], "diffuse",   tg::bake_bark_diffuse(sp, 0ULL),   16.0, 65.0);
+        check_wrap(k_species_name[s], "normal",    tg::bake_bark_normal(sp, 0ULL),    20.0, 95.0);
+        check_wrap(k_species_name[s], "ao",        tg::bake_bark_ao(sp, 0ULL),        16.0, 95.0);
+        check_wrap(k_species_name[s], "roughness", tg::bake_bark_roughness(sp, 0ULL), 14.0, 65.0);
     }
 }
 
@@ -551,7 +650,7 @@ TEST_CASE("[treegen_bark_b1] physically scaled normals have p90 tilt >= 15 deg o
     constexpr double k_rad2deg = 180.0 / 3.14159265358979323846;
     for (size_t s = 0; s < k_species.size(); ++s) {
         const auto sp = k_species[s];
-        auto normal = tg::bake_bark_normal(sp, tg::species_fnv_name(sp));
+        auto normal = tg::bake_bark_normal(sp, 0ULL);
         const size_t n = size_t(tg::K_BARK_TEX_W) * tg::K_BARK_TEX_H;
         std::vector<float> tilts;
         tilts.reserve(n);
@@ -577,9 +676,8 @@ TEST_CASE("[treegen_bark_b1] cavity AO sign seal: furrow bottoms strictly darker
     // Kills the inverted 1 - |grad| crevice bug where furrow bottoms had AO = 1.0.
     for (size_t s = 0; s < k_species.size(); ++s) {
         const auto sp = k_species[s];
-        const uint64_t seed = tg::species_fnv_name(sp);
-        auto diff = tg::bake_bark_diffuse(sp, seed);
-        auto ao   = tg::bake_bark_ao(sp, seed);
+        auto diff = tg::bake_bark_diffuse(sp, 0ULL);
+        auto ao   = tg::bake_bark_ao(sp, 0ULL);
         const size_t n = size_t(tg::K_BARK_TEX_W) * tg::K_BARK_TEX_H;
 
         std::vector<std::pair<float, float>> luma_ao;
@@ -609,10 +707,9 @@ TEST_CASE("[treegen_bark_b1] cavity AO sign seal: furrow bottoms strictly darker
 
 TEST_CASE("[treegen_bark_b1] birch lenticels distributed across full V (top, middle, bottom thirds)",
           "[treegen][treegen_bark_b1]") {
-    const uint64_t seed = tg::species_fnv_name(tg::LeafShape::BirchSerrated);
-    auto diff = tg::bake_bark_diffuse(tg::LeafShape::BirchSerrated, seed);
-    auto ao   = tg::bake_bark_ao(tg::LeafShape::BirchSerrated, seed);
-    auto rough = tg::bake_bark_roughness(tg::LeafShape::BirchSerrated, seed);
+    auto diff  = tg::bake_bark_diffuse  (tg::LeafShape::BirchSerrated, 0ULL);
+    auto ao    = tg::bake_bark_ao       (tg::LeafShape::BirchSerrated, 0ULL);
+    auto rough = tg::bake_bark_roughness(tg::LeafShape::BirchSerrated, 0ULL);
 
     constexpr int W = tg::K_BARK_TEX_W;
     constexpr int H = tg::K_BARK_TEX_H;

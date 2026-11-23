@@ -121,18 +121,31 @@ namespace treegen {
     // All 4 encoders ignore `seed` so all staged GLBs deduplicate to one atlas.
     // `cluster_cell_grid`: default [4, 3] emits full botanical sprigs; non-default
     // [nx, ny] scales leaf blade radius deterministically for sweep overrides.
+    // Normal and roughness encode losslessly as opaque RGB8 PNG; translucency
+    // encodes losslessly as Gray8 PNG (all consumers decode with req_comp = 4).
+    struct LeafAtlasPngBundle {
+        std::vector<uint8_t> albedo_png;
+        std::vector<uint8_t> normal_png;
+        std::vector<uint8_t> translucency_png;
+        std::vector<uint8_t> roughness_png;
+    };
+
+    // Single-pass bundle encoder (bakes all 16 cells once -> 4x faster than 4 calls).
+    LeafAtlasPngBundle encode_leaf_bundle_pngs(
+        uint64_t seed, const std::array<int, 2>& cluster_cell_grid = k_default_cluster_cell_grid);
+
     std::vector<uint8_t> encode_leaf_atlas_png(
         uint64_t seed, const std::array<int, 2>& cluster_cell_grid = k_default_cluster_cell_grid);
 
-    // Tangent-space normal (RGBA8: RGB = normal*0.5+0.5, A=255).
+    // Tangent-space normal (OpenGL +Y_up = +B = -dP/dV; RGB8 PNG, A=255 on decode).
     std::vector<uint8_t> encode_leaf_normal_png(
         uint64_t seed, const std::array<int, 2>& cluster_cell_grid = k_default_cluster_cell_grid);
 
-    // Translucency (RGBA8: R = trans >= 0.05 on all alpha>0, GB = 0, A=255).
+    // Translucency (Gray8 PNG: R = trans >= 0.05 on all alpha>0).
     std::vector<uint8_t> encode_leaf_translucency_png(
         uint64_t seed, const std::array<int, 2>& cluster_cell_grid = k_default_cluster_cell_grid);
 
-    // Roughness (glTF MR RGBA8: R = 255, G = roughness, B = 0, A = 255).
+    // Roughness (glTF MR RGB8 PNG: R = 255, G = roughness, B = 0, A = 255 on decode).
     std::vector<uint8_t> encode_leaf_roughness_png(
         uint64_t seed, const std::array<int, 2>& cluster_cell_grid = k_default_cluster_cell_grid);
 

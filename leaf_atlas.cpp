@@ -401,7 +401,8 @@ namespace treegen {
                     const float hU = static_cast<float>(vein_h[static_cast<size_t>(yu) * K_LEAF_CELL_PX + x]);
                     const float hD = static_cast<float>(vein_h[static_cast<size_t>(yd) * K_LEAF_CELL_PX + x]);
                     const float nx = -(hR - hL) * k_normal_strength / 255.0f;
-                    const float ny = -(hD - hU) * k_normal_strength / 255.0f;
+                    // OpenGL +Y_up (+B = -dP/dV): hU is at y-1 (+B), so -dh/dB = -(hU - hD) = +(hD - hU).
+                    const float ny = +(hD - hU) * k_normal_strength / 255.0f;
                     const float nz = 1.0f;
                     const float inv_l = 1.0f / std::sqrt(nx * nx + ny * ny + nz * nz);
                     c.norm_x[ci] = u8_from_01(nx * inv_l * 0.5f + 0.5f);
@@ -438,16 +439,16 @@ namespace treegen {
         }
 
         // Hard non-squareness envelope test for broadleaf sprig pixels:
-        // recessed >= 16 px from all 4 borders AND strictly outside all four 32x32 corner triangles.
+        // recessed >= 16 px from all 4 borders AND strictly outside all four 32x32 corner squares.
         inline bool in_sprig_safe_mask(int x, int y) {
             constexpr int W = K_LEAF_CELL_PX;
             constexpr int R = K_LEAF_SPRIG_RECESS_PX;
             constexpr int C = K_LEAF_SPRIG_CORNER_PX;
             if (x < R || x >= W - R || y < R || y >= W - R) return false;
-            if (x + y < C) return false;
-            if ((W - 1 - x) + y < C) return false;
-            if (x + (W - 1 - y) < C) return false;
-            if ((W - 1 - x) + (W - 1 - y) < C) return false;
+            if ((x < C && y < C) ||
+                (x >= W - C && y < C) ||
+                (x < C && y >= W - C) ||
+                (x >= W - C && y >= W - C)) return false;
             return true;
         }
 
@@ -590,9 +591,10 @@ namespace treegen {
 
                     const size_t ci = static_cast<size_t>(y) * W + x;
                     // Signed cross-section offset [-1, 1] for cylindrical petiole normal.
+                    // OpenGL +Y_up (+B = -dP/dV = -y_px): negate py when mapping to tangent +Y.
                     const float cross_s = clampf(((pt.x - a.x) * px + (pt.y - a.y) * py) / std::max(0.5f, hw_t), -1.0f, 1.0f);
-                    const float nx = px * cross_s * 0.72f;
-                    const float ny = py * cross_s * 0.72f;
+                    const float nx =  px * cross_s * 0.72f;
+                    const float ny = -py * cross_s * 0.72f;
                     const float nz = std::sqrt(std::max(0.20f, 1.0f - nx * nx - ny * ny));
 
                     // Warm woody olive-brown petiole tint.
@@ -779,15 +781,15 @@ namespace treegen {
                     lb = lb * (1.0f - 0.14f * rim) + (lb * 0.55f)         * (0.14f * rim);
 
                     // --- 2. Per-leaf 3D Tangent-Space Normal ---
-                    // Cross-blade V-cupping (~10 deg) + subtle longitudinal arch + vein ridge.
+                    // Cross-blade V-cupping (~10 deg) + convex longitudinal arch + vein ridge.
                     const float cup_x = -std::tanh(lx * 3.8f) * 0.18f;
-                    const float cup_y = -ly * 0.10f;
+                    const float cup_y = +ly * 0.10f;
                     const float loc_nx = cup_x + vn.dnx;
                     const float loc_ny = cup_y + vn.dny;
 
-                    // Rotate leaf-local normal into cell tangent space (+x right, +y down).
+                    // Rotate leaf-local normal into OpenGL cell tangent space (+x right = +T, +y up = +B = -dP/dV).
                     const float rot_nx =  loc_nx * ca - loc_ny * sa;
-                    const float rot_ny = -(loc_nx * sa + loc_ny * ca);
+                    const float rot_ny = +(loc_nx * sa + loc_ny * ca);
 
                     // Add per-leaf 3D pitch/roll tilt (±18..28 deg) and normalize.
                     float nx = rot_nx + tilt_nx;
@@ -879,9 +881,10 @@ namespace treegen {
                     cy = clampf(cy, margin, static_cast<float>(K_LEAF_CELL_PX) - margin);
 
                     // Per-leaf 3D tangent-space tilt (±18..28 deg outward + organic jitter).
+                    // OpenGL +Y_up (+B = -y_px): outward along +B is -fy = +cos(dir_rad).
                     const float tilt_mag = (out_tilt_deg + rand_sym() * 6.0f) * k_deg;
-                    const float tilt_x = clampf(fx * tilt_mag + rand_sym() * 11.0f * k_deg, -0.50f, 0.50f);
-                    const float tilt_y = clampf(fy * tilt_mag + rand_sym() * 11.0f * k_deg, -0.50f, 0.50f);
+                    const float tilt_x = clampf( fx * tilt_mag + rand_sym() * 11.0f * k_deg, -0.50f, 0.50f);
+                    const float tilt_y = clampf(-fy * tilt_mag + rand_sym() * 11.0f * k_deg, -0.50f, 0.50f);
 
                     SprigLeafSpec lf;
                     lf.cx            = cx;
@@ -1021,8 +1024,10 @@ namespace treegen {
 
                     const float s = clampf(perp / std::max(0.5f, hw_t), -1.0f, 1.0f);
                     // Cylindrical cross-section normal rotated along the needle + slight 3D pitch.
+                    // Pine BranchStrip (wrap_v=true) aligns T=+dP/dV; pine whorls (wrap_v=false)
+                    // align OpenGL +Y_up (+B = -dP/dV = -y_px), so negate ny when !wrap_v.
                     float nx = px * s * 0.78f + ux * tilt_z_bias;
-                    float ny = py * s * 0.78f + uy * tilt_z_bias;
+                    float ny = (wrap_v ? 1.0f : -1.0f) * (py * s * 0.78f + uy * tilt_z_bias);
                     const float xy2 = nx * nx + ny * ny;
                     if (xy2 > 0.82f) {
                         const float sc = std::sqrt(0.82f / xy2);
@@ -1160,65 +1165,120 @@ namespace treegen {
             return c;
         }
 
-        // Bake all 16 cells into the requested 1024x1024 RGBA8 atlas buffer.
-        std::vector<uint8_t> encode_atlas_channel(AtlasChannelKind kind,
-                                                  const std::array<int, 2>& cluster_cell_grid) {
-            std::vector<uint8_t> rgba(
-                static_cast<size_t>(K_LEAF_ATLAS_PX) * K_LEAF_ATLAS_PX * 4, 0);
-
-            // Initialize atlas defaults per channel kind.
-            const size_t total_px = static_cast<size_t>(K_LEAF_ATLAS_PX) * K_LEAF_ATLAS_PX;
-            if (kind == AtlasChannelKind::Normal) {
-                for (size_t i = 0; i < total_px; ++i) {
-                    rgba[i * 4 + 0] = 128;
-                    rgba[i * 4 + 1] = 128;
-                    rgba[i * 4 + 2] = 255;
-                    rgba[i * 4 + 3] = 255;
-                }
-            } else if (kind == AtlasChannelKind::Roughness) {
-                for (size_t i = 0; i < total_px; ++i) {
-                    rgba[i * 4 + 0] = 255;
-                    rgba[i * 4 + 1] = 179;
-                    rgba[i * 4 + 2] = 0;
-                    rgba[i * 4 + 3] = 255;
-                }
-            } else if (kind == AtlasChannelKind::Translucency) {
-                for (size_t i = 0; i < total_px; ++i) {
-                    rgba[i * 4 + 3] = 255;
-                }
-            }
+        // Bake all 16 atlas cells once (4x4 grid indexed row * 4 + col).
+        std::array<CellChannels, 16> bake_all_atlas_cells(const std::array<int, 2>& cluster_cell_grid) {
+            std::array<CellChannels, 16> cells;
+            auto at = [&](int row, int col) -> CellChannels& {
+                return cells[static_cast<size_t>(row * K_LEAF_ATLAS_DIM + col)];
+            };
 
             // Row 0: single-leaf cells for all 4 species.
             for (LeafShape sp : k_species_in_atlas) {
-                const CellChannels cell = bake_single_leaf_cell(sp);
-                blit_cell_to_atlas(rgba.data(), leaf_atlas_cell_row(sp), leaf_atlas_cell_col(sp), cell, kind);
+                at(leaf_atlas_cell_row(sp), leaf_atlas_cell_col(sp)) = bake_single_leaf_cell(sp);
             }
 
             // Rows 1..3 x Cols 0, 2, 3: 3 botanical sprig variants per broadleaf species.
             for (LeafShape sp : {LeafShape::OakLobed, LeafShape::BirchSerrated, LeafShape::MapleStar}) {
                 const int col = leaf_cluster_cell_col(sp);
                 for (int row = K_LEAF_SPRIG_ROW_MIN; row <= K_LEAF_SPRIG_ROW_MAX; ++row) {
-                    const CellChannels cell = bake_broadleaf_sprig_cell(sp, row, cluster_cell_grid);
-                    blit_cell_to_atlas(rgba.data(), row, col, cell, kind);
+                    at(row, col) = bake_broadleaf_sprig_cell(sp, row, cluster_cell_grid);
                 }
             }
 
             // Rows 1..3 x Col 1: Pine fascicle shoot + two pine whorl tufts.
             {
                 const int col = leaf_atlas_cell_col(LeafShape::PineNeedle);
-                const CellChannels strip_cell = bake_pine_fascicle_strip_cell();
-                blit_cell_to_atlas(rgba.data(), 1, col, strip_cell, kind);
-                const CellChannels whorl_a = bake_pine_whorl_cell(2, cluster_cell_grid);
-                blit_cell_to_atlas(rgba.data(), 2, col, whorl_a, kind);
-                const CellChannels whorl_b = bake_pine_whorl_cell(3, cluster_cell_grid);
-                blit_cell_to_atlas(rgba.data(), 3, col, whorl_b, kind);
+                at(1, col) = bake_pine_fascicle_strip_cell();
+                at(2, col) = bake_pine_whorl_cell(2, cluster_cell_grid);
+                at(3, col) = bake_pine_whorl_cell(3, cluster_cell_grid);
+            }
+            return cells;
+        }
+
+        // Encode one 1024x1024 atlas PNG from pre-baked cells using lossless compact channels:
+        // Albedo -> RGBA8, Normal/Roughness -> RGB8 (opaque A=255), Translucency -> Gray8 (.r = trans).
+        std::vector<uint8_t> encode_atlas_channel_from_cells(
+            const std::array<CellChannels, 16>& cells, AtlasChannelKind kind) {
+            constexpr size_t total_px = static_cast<size_t>(K_LEAF_ATLAS_PX) * K_LEAF_ATLAS_PX;
+
+            if (kind == AtlasChannelKind::Albedo) {
+                std::vector<uint8_t> rgba(total_px * 4, 0);
+                for (int row = 0; row < K_LEAF_ATLAS_DIM; ++row) {
+                    for (int col = 0; col < K_LEAF_ATLAS_DIM; ++col) {
+                        blit_cell_to_atlas(rgba.data(), row, col,
+                                           cells[static_cast<size_t>(row * K_LEAF_ATLAS_DIM + col)],
+                                           AtlasChannelKind::Albedo);
+                    }
+                }
+                return encode_png_rgba8(K_LEAF_ATLAS_PX, K_LEAF_ATLAS_PX,
+                                        K_LEAF_ATLAS_PX * 4, rgba.data());
             }
 
-            return encode_png_rgba8(K_LEAF_ATLAS_PX, K_LEAF_ATLAS_PX,
-                                    K_LEAF_ATLAS_PX * 4, rgba.data());
+            if (kind == AtlasChannelKind::Translucency) {
+                std::vector<uint8_t> gray(total_px, 0);
+                for (int row = 0; row < K_LEAF_ATLAS_DIM; ++row) {
+                    for (int col = 0; col < K_LEAF_ATLAS_DIM; ++col) {
+                        const CellChannels& c = cells[static_cast<size_t>(row * K_LEAF_ATLAS_DIM + col)];
+                        const int x0 = col * K_LEAF_CELL_PX;
+                        const int y0 = row * K_LEAF_CELL_PX;
+                        for (int y = 0; y < K_LEAF_CELL_PX; ++y) {
+                            for (int x = 0; x < K_LEAF_CELL_PX; ++x) {
+                                const size_t ci = static_cast<size_t>(y) * K_LEAF_CELL_PX + x;
+                                gray[static_cast<size_t>(y0 + y) * K_LEAF_ATLAS_PX + (x0 + x)] = c.trans[ci];
+                            }
+                        }
+                    }
+                }
+                return encode_png_gray8(K_LEAF_ATLAS_PX, K_LEAF_ATLAS_PX,
+                                        K_LEAF_ATLAS_PX, gray.data());
+            }
+
+            // Normal or Roughness: lossless opaque RGB8 PNG (decodes to bit-exact RGBA8 with A=255).
+            std::vector<uint8_t> rgb(total_px * 3, 0);
+            for (int row = 0; row < K_LEAF_ATLAS_DIM; ++row) {
+                for (int col = 0; col < K_LEAF_ATLAS_DIM; ++col) {
+                    const CellChannels& c = cells[static_cast<size_t>(row * K_LEAF_ATLAS_DIM + col)];
+                    const int x0 = col * K_LEAF_CELL_PX;
+                    const int y0 = row * K_LEAF_CELL_PX;
+                    for (int y = 0; y < K_LEAF_CELL_PX; ++y) {
+                        for (int x = 0; x < K_LEAF_CELL_PX; ++x) {
+                            const size_t ci  = static_cast<size_t>(y) * K_LEAF_CELL_PX + x;
+                            const size_t idx = (static_cast<size_t>(y0 + y) * K_LEAF_ATLAS_PX + (x0 + x)) * 3;
+                            if (kind == AtlasChannelKind::Normal) {
+                                rgb[idx + 0] = c.norm_x[ci];
+                                rgb[idx + 1] = c.norm_y[ci];
+                                rgb[idx + 2] = c.norm_z[ci];
+                            } else {
+                                rgb[idx + 0] = 255;
+                                rgb[idx + 1] = c.rough[ci];
+                                rgb[idx + 2] = 0;
+                            }
+                        }
+                    }
+                }
+            }
+            return encode_png_rgb8(K_LEAF_ATLAS_PX, K_LEAF_ATLAS_PX,
+                                   K_LEAF_ATLAS_PX * 3, rgb.data());
+        }
+
+        std::vector<uint8_t> encode_atlas_channel(AtlasChannelKind kind,
+                                                  const std::array<int, 2>& cluster_cell_grid) {
+            const auto cells = bake_all_atlas_cells(cluster_cell_grid);
+            return encode_atlas_channel_from_cells(cells, kind);
         }
 
     }  // namespace
+
+    LeafAtlasPngBundle encode_leaf_bundle_pngs(uint64_t /*seed*/,
+                                               const std::array<int, 2>& cluster_cell_grid) {
+        const auto cells = bake_all_atlas_cells(cluster_cell_grid);
+        LeafAtlasPngBundle out;
+        out.albedo_png       = encode_atlas_channel_from_cells(cells, AtlasChannelKind::Albedo);
+        out.normal_png       = encode_atlas_channel_from_cells(cells, AtlasChannelKind::Normal);
+        out.translucency_png = encode_atlas_channel_from_cells(cells, AtlasChannelKind::Translucency);
+        out.roughness_png    = encode_atlas_channel_from_cells(cells, AtlasChannelKind::Roughness);
+        return out;
+    }
 
     std::vector<uint8_t> encode_leaf_atlas_png(uint64_t /*seed*/, const std::array<int, 2>& cluster_cell_grid) {
         return encode_atlas_channel(AtlasChannelKind::Albedo, cluster_cell_grid);

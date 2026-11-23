@@ -105,7 +105,7 @@ GeneratedTree generate_tree(const Scenario& s, uint64_t cli_seed) {
     // rotational variety comes from bopts.seam_offset_rad).
     const LeafShape bark_species = s.tree.leaves.shape;
     {
-        BarkPngBundle bark = encode_bark_bundle_pngs(bark_species, species_fnv_name(bark_species));
+        BarkPngBundle bark = encode_bark_bundle_pngs(bark_species, 0ULL);
         ImageData d, n, ao, mr;
         d.png_bytes  = std::move(bark.diffuse_png);
         n.png_bytes  = std::move(bark.normal_png);
@@ -117,14 +117,15 @@ GeneratedTree generate_tree(const Scenario& s, uint64_t cli_seed) {
         g.images.push_back(std::move(mr));  // index 3
     }
 
-    // C6 P4 — leaf textures (when has_leaves). C3 P2 — roughness atlas at index 7.
+    // C6 P4 — leaf textures (when has_leaves). Single-pass bundle bake (4x faster).
     if (has_leaves) {
         const auto& grid = s.tree.leaves.cluster_cell_grid;
+        LeafAtlasPngBundle leaf = encode_leaf_bundle_pngs(seed_effective, grid);
         ImageData ld, ln, lt, lr;
-        ld.png_bytes = encode_leaf_atlas_png(seed_effective, grid);
-        ln.png_bytes = encode_leaf_normal_png(seed_effective, grid);
-        lt.png_bytes = encode_leaf_translucency_png(seed_effective, grid);
-        lr.png_bytes = encode_leaf_roughness_png(seed_effective, grid);
+        ld.png_bytes = std::move(leaf.albedo_png);
+        ln.png_bytes = std::move(leaf.normal_png);
+        lt.png_bytes = std::move(leaf.translucency_png);
+        lr.png_bytes = std::move(leaf.roughness_png);
         g.images.push_back(std::move(ld));  // index 4
         g.images.push_back(std::move(ln));  // index 5
         g.images.push_back(std::move(lt));  // index 6

@@ -1048,15 +1048,17 @@ TEST_CASE("[treegen_leaf_atlas_p3] sprig normal map uses OpenGL +Y_up (+B = -dP/
     constexpr int W = tg::K_LEAF_CELL_PX;
     constexpr int half = W / 2;
 
-    // Across all 9 broadleaf sprig cells (rows 1..3 x {Oak, Birch, Maple}), upper
-    // foliage points outward along +B (-y_px -> ny > 0, G > 128), lower foliage
-    // points along -B (+y_px -> ny < 0, G < 128), right along +T (nx > 0), left along -T (nx < 0).
-    for (tg::LeafShape sp : {tg::LeafShape::OakLobed, tg::LeafShape::BirchSerrated, tg::LeafShape::MapleStar}) {
+    // Across all 9 broadleaf sprig cells (rows 1..3 x {Oak, Birch, Maple}) AND
+    // Pine whorl bouquet cells (rows 2..3 x Pine), upper foliage points outward
+    // along +B (-y_px -> ny > 0, G > 128), lower foliage along -B (ny < 0),
+    // right along +T (nx > 0), left along -T (nx < 0).
+    for (tg::LeafShape sp : k_species) {
         const int col = tg::leaf_cluster_cell_col(sp);
+        const int row_start = (sp == tg::LeafShape::PineNeedle) ? 2 : tg::K_LEAF_SPRIG_ROW_MIN;
         double up_ny = 0.0, dn_ny = 0.0, rt_nx = 0.0, lt_nx = 0.0;
         size_t up_c = 0, dn_c = 0, rt_c = 0, lt_c = 0;
 
-        for (int row = tg::K_LEAF_SPRIG_ROW_MIN; row <= tg::K_LEAF_SPRIG_ROW_MAX; ++row) {
+        for (int row = row_start; row <= tg::K_LEAF_SPRIG_ROW_MAX; ++row) {
             const int x0 = col * W;
             const int y0 = row * W;
             for (int y = 0; y < W; ++y) {

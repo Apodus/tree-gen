@@ -351,11 +351,17 @@ void emit_sprig_bouquet_uv(LeafMeshOutput& out,
     const float sin_tilt  = std::sin(cone_tilt);
 
     const int N = opts.cluster_count_per_tip > 0 ? opts.cluster_count_per_tip : 1;
+    const bool is_pine = (opts.shape == LeafShape::PineNeedle);
 
     static constexpr int k_variant_perms[6][3] = {
         {1, 2, 3}, {1, 3, 2}, {2, 1, 3}, {2, 3, 1}, {3, 1, 2}, {3, 2, 1}
     };
-    const int* perm = k_variant_perms[rng.next_u32() % 6u];
+    static constexpr int k_pine_combos[4][3] = {
+        {2, 3, 2}, {3, 2, 3}, {2, 2, 3}, {3, 3, 2}
+    };
+    const int* perm = is_pine
+        ? k_pine_combos[rng.next_u32() % 4u]
+        : k_variant_perms[rng.next_u32() % 6u];
 
     const vec2 corners[4] = {
         vec2{-1.0f, -1.0f}, // 0 bottom-left
@@ -365,7 +371,8 @@ void emit_sprig_bouquet_uv(LeafMeshOutput& out,
     };
 
     for (int k = 0; k < N; ++k) {
-        const float az_jitter = (rng.next_float_01() - 0.5f) * (24.0f * k_deg); // ±12 deg
+        const float az_span   = is_pine ? (32.0f * k_deg) : (24.0f * k_deg); // ±16 deg pine / ±12 deg broadleaf
+        const float az_jitter = (rng.next_float_01() - 0.5f) * az_span;
         const float az_k      = spin + (k_two_pi * static_cast<float>(k)) / static_cast<float>(N) + az_jitter;
         const float ca = std::cos(az_k);
         const float sa = std::sin(az_k);
@@ -374,24 +381,36 @@ void emit_sprig_bouquet_uv(LeafMeshOutput& out,
         const vec3 rad_k = right0 * ca + forward0 * sa;
         const vec3 tan_k = right0 * (-sa) + forward0 * ca;
 
-        // Outward-tilted card normal n_k (dot(n_k, spray_axis) = cos(cone_tilt) >= cos(42 deg)).
-        const vec3 n_k = normalized(spray_axis * cos_tilt + rad_k * sin_tilt);
+        // Outward-tilted card normal n_k (dot(n_k, spray_axis) = cos(tilt_k) >= cos(42 deg)).
+        float ct_k = cos_tilt;
+        float st_k = sin_tilt;
+        if (is_pine) {
+            // ±16 deg per-card tilt jitter, clamped cleanly under the 42 deg hard cap.
+            const float tilt_jit = (rng.next_float_01() - 0.5f) * (32.0f * k_deg);
+            const float tilt_k   = std::max(0.15f, std::min(cone_tilt + tilt_jit, K_MAX_SPRIG_CONE_TILT_RAD));
+            ct_k = std::cos(tilt_k);
+            st_k = std::sin(tilt_k);
+        }
+        const vec3 n_k = normalized(spray_axis * ct_k + rad_k * st_k);
 
         // Right-handed in-plane basis (u_axis, v_axis, n_k): cross(n_k, u_axis) = +v_axis.
         const vec3 u_axis = normalized(tan_k);
         const vec3 v_axis = normalized(cross(n_k, u_axis));
 
-        // ±15 deg in-plane roll.
-        const float roll_k = (rng.next_float_01() - 0.5f) * (30.0f * k_deg);
+        // ±16 deg (pine) / ±15 deg (broadleaf) in-plane roll.
+        const float roll_span = is_pine ? (32.0f * k_deg) : (30.0f * k_deg);
+        const float roll_k    = (rng.next_float_01() - 0.5f) * roll_span;
         const float cr = std::cos(roll_k);
         const float sr = std::sin(roll_k);
         const vec3 right_k   = normalized(u_axis * cr + v_axis * sr);
         const vec3 forward_k = normalized(cross(n_k, right_k));
 
-        // ±12% per-card scale jitter.
-        const float s_k = opts.leaf_size_m * (0.88f + 0.24f * rng.next_float_01());
+        // ±22% (pine) / ±12% (broadleaf) per-card scale jitter.
+        const float s_k = is_pine
+            ? opts.leaf_size_m * (0.78f + 0.44f * rng.next_float_01())
+            : opts.leaf_size_m * (0.88f + 0.24f * rng.next_float_01());
 
-        // Deterministic 50% U-mirror (doubles 3 baked cells into 6 silhouettes).
+        // Deterministic 50% U-mirror (doubles baked cells into 2x silhouettes).
         const bool  mirror_u = (rng.next_u32() & 1u) != 0u;
         const float u_sign   = mirror_u ? -1.0f : +1.0f;
         const int   var_row  = perm[k % 3];
@@ -676,47 +695,52 @@ LeafMeshOutput build_branch_strip_mesh(const TreeSkeleton&      skel,
         const uint8_t twig_b   = quantize_wind(4.0f * d * d * od);
         const uint8_t leaf_b   = quantize_wind(d * d * d);
 
-        // Angular offsets: pi/N spacing (bilateral strips cover both sides).
+        // Deterministic per-segment angular jitter breaks rigid +-cross alignment
+        // across successive segments while keeping exact pi/N spacing within a segment.
         constexpr float k_pi = 3.14159265358979323846f;
+        pcg32 seg_rng;
+        seg_rng.seed(static_cast<uint64_t>(i), 0xC3'05'57'1BULL);
+        const float seg_jitter = (seg_rng.next_float_01() - 0.5f) * (k_pi * 0.65f);
+        const float hw_start   = hw * 1.04f;
+        const float hw_end     = hw * 0.90f;
+
+        // Angular offsets: pi/N spacing (bilateral strips cover both sides).
         for (int s = 0; s < strip_count; ++s) {
-            float angle = opts.strip_angular_offset
+            float angle = opts.strip_angular_offset + seg_jitter
                         + (k_pi / static_cast<float>(strip_count)) * static_cast<float>(s);
 
-            // Perpendicular direction at this angular offset.
+            // Perpendicular direction at this angular offset (quad width axis = +dP/dU).
             const float ca = std::cos(angle);
             const float sa = std::sin(angle);
             vec3 strip_perp = perp_u * ca + perp_v * sa;
 
-            // Apply droop: rotate strip_perp slightly downward (toward -Z).
+            // Apply droop rotation around branch axis.
             if (opts.strip_droop_angle > 0.0f) {
                 strip_perp = rotate_axis(strip_perp, seg_dir, opts.strip_droop_angle);
             }
 
-            const vec3 strip_normal = normalized(strip_perp);
+            const vec3 strip_right  = normalized(strip_perp);
+            // True face normal perpendicular to BOTH width (strip_right) and length (seg_dir).
+            const vec3 strip_normal = normalized(cross(strip_right, seg_dir));
+            const vec3 tangent_dir  = strip_right; // +dP/dU; B = cross(N, T) = +seg_dir
 
-            // 4 verts: start-left, start-right, end-right, end-left.
-            const vec3 p0 = parent.position + strip_perp * avg_radius;
-            const vec3 p1 = child.position  + strip_perp * avg_radius;
-            const vec3 left  = strip_perp * (-hw);
-            const vec3 right = strip_perp * hw;
-
-            // UV: U=[0,1] across width, V tiled along branch.
-            const float v_tiles = seg_len / opts.strip_width_m;
+            // UV: U=[0,1] across width, V clamped safely inside [0, 1] of cell (1,1).
+            const float v_tiles = clamp01(seg_len / std::max(0.05f, opts.strip_width_m));
 
             const uint32_t vbase = static_cast<uint32_t>(out.positions.size() / 3);
 
-            // Vertices offset perpendicular from the branch center.
-            const vec3 v0 = parent.position + strip_perp * avg_radius + left;   // start-left
-            const vec3 v1 = parent.position + strip_perp * avg_radius + right;  // start-right
-            const vec3 v2 = child.position  + strip_perp * avg_radius + right;  // end-right
-            const vec3 v3 = child.position  + strip_perp * avg_radius + left;   // end-left
+            // Centered on the branch axis (no sideways avg_radius drift) with slight axial taper.
+            const vec3 v0 = parent.position - strip_right * hw_start; // start-left
+            const vec3 v1 = parent.position + strip_right * hw_start; // start-right
+            const vec3 v2 = child.position  + strip_right * hw_end;   // end-right
+            const vec3 v3 = child.position  - strip_right * hw_end;   // end-left
 
             push_xyz(out.positions, v0);
             push_xyz(out.positions, v1);
             push_xyz(out.positions, v2);
             push_xyz(out.positions, v3);
 
-            // UVs from needle-strip atlas cell.
+            // UVs from needle-strip atlas cell (1,1).
             const vec2 uv0 = needle_strip_tile_uv(0.0f, 0.0f);
             const vec2 uv1 = needle_strip_tile_uv(1.0f, 0.0f);
             const vec2 uv2 = needle_strip_tile_uv(1.0f, v_tiles);
@@ -727,7 +751,6 @@ LeafMeshOutput build_branch_strip_mesh(const TreeSkeleton&      skel,
             push_uv(out.uvs, uv3.x, uv3.y);
 
             // Per-vertex normals, tangents, wind, material.
-            const vec3 tangent_dir = seg_dir; // along-branch (dP/dV); atlas normal bake matches this convention
             assert(std::abs(dot(tangent_dir, strip_normal)) < 1e-4f);
             for (int vi = 0; vi < 4; ++vi) {
                 push_xyz(out.normals, strip_normal);

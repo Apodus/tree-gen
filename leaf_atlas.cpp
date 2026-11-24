@@ -1024,10 +1024,20 @@ namespace treegen {
 
                     const float s = clampf(perp / std::max(0.5f, hw_t), -1.0f, 1.0f);
                     // Cylindrical cross-section normal rotated along the needle + slight 3D pitch.
-                    // Pine BranchStrip (wrap_v=true) aligns T=+dP/dV; pine whorls (wrap_v=false)
-                    // align OpenGL +Y_up (+B = -dP/dV = -y_px), so negate ny when !wrap_v.
-                    float nx = px * s * 0.78f + ux * tilt_z_bias;
-                    float ny = (wrap_v ? 1.0f : -1.0f) * (py * s * 0.78f + uy * tilt_z_bias);
+                    // Pine BranchStrip (wrap_v=true) keeps its V-tileable cross-section normal;
+                    // Pine whorls (wrap_v=false) add a convex OpenGL +Y_up (+B = -dP/dV = -y_px)
+                    // bough-dome macro normal so sunlit upper needles face +B and lower needles -B.
+                    float nx = 0.0f;
+                    float ny = 0.0f;
+                    if (wrap_v) {
+                        nx = px * s * 0.78f + ux * tilt_z_bias;
+                        ny = py * s * 0.78f + uy * tilt_z_bias;
+                    } else {
+                        const float dome_x = clampf((static_cast<float>(x) + 0.5f - 128.0f) / 96.0f, -1.0f, 1.0f);
+                        const float dome_y = clampf(-(static_cast<float>(y) + 0.5f - 128.0f) / 96.0f, -1.0f, 1.0f);
+                        nx = px * s * 0.44f + ux * (0.18f + tilt_z_bias * 0.45f) + dome_x * 0.46f;
+                        ny = -py * s * 0.44f - uy * (0.18f + tilt_z_bias * 0.45f) + dome_y * 0.46f;
+                    }
                     const float xy2 = nx * nx + ny * ny;
                     if (xy2 > 0.82f) {
                         const float sc = std::sqrt(0.82f / xy2);
@@ -1114,51 +1124,143 @@ namespace treegen {
             return c;
         }
 
-        // Cells (2, 1) and (3, 1): Pine Whorl Tuft A (radial cluster) and Tuft B (asymmetric candle).
+        // Stamp a warm golden-ochre apical pine candle bud inside a sub-cluster.
+        void stamp_pine_candle(CellChannels& c, std::vector<uint8_t>& owner,
+                               vec2 base, float angle_rad, float len_px, float base_hw,
+                               int subcluster_id) {
+            constexpr int W = K_LEAF_CELL_PX;
+            const uint8_t my_tag = static_cast<uint8_t>(subcluster_id + 1);
+            const float ux = std::cos(angle_rad);
+            const float uy = std::sin(angle_rad);
+            const float px = -uy;
+            const float py =  ux;
+            const vec2 tip{ base.x + ux * len_px, base.y + uy * len_px };
+            const float max_hw = base_hw + 2.0f;
+            const int x0 = std::max(K_LEAF_SPRIG_RECESS_PX, static_cast<int>(std::floor(std::min(base.x, tip.x) - max_hw)));
+            const int x1 = std::min(W - K_LEAF_SPRIG_RECESS_PX - 1, static_cast<int>(std::ceil(std::max(base.x, tip.x) + max_hw)));
+            const int y0 = std::max(K_LEAF_SPRIG_RECESS_PX, static_cast<int>(std::floor(std::min(base.y, tip.y) - max_hw)));
+            const int y1 = std::min(W - K_LEAF_SPRIG_RECESS_PX - 1, static_cast<int>(std::ceil(std::max(base.y, tip.y) + max_hw)));
+
+            for (int y = y0; y <= y1; ++y) {
+                for (int x = x0; x <= x1; ++x) {
+                    if (!in_sprig_safe_mask(x, y)) continue;
+                    const float dx = static_cast<float>(x) + 0.5f - base.x;
+                    const float dy = static_cast<float>(y) + 0.5f - base.y;
+                    const float along = dx * ux + dy * uy;
+                    if (along < 0.0f || along > len_px) continue;
+                    const float t = along / len_px;
+                    // Rounded tapered pine candle profile.
+                    const float hw_t = base_hw * std::sin(clampf(t, 0.05f, 0.98f) * k_pi * 0.85f + 0.15f);
+                    const float perp = dx * px + dy * py;
+                    if (std::abs(perp) > hw_t) continue;
+                    if (near_other_subcluster(owner, x, y, my_tag, 2)) continue;
+
+                    const float s = clampf(perp / std::max(0.5f, hw_t), -1.0f, 1.0f);
+                    const float dome_x = clampf((static_cast<float>(x) + 0.5f - 128.0f) / 96.0f, -1.0f, 1.0f);
+                    const float dome_y = clampf(-(static_cast<float>(y) + 0.5f - 128.0f) / 96.0f, -1.0f, 1.0f);
+                    float nx = px * s * 0.50f + dome_x * 0.42f;
+                    float ny = -py * s * 0.50f + dome_y * 0.42f;
+                    const float xy2 = nx * nx + ny * ny;
+                    if (xy2 > 0.78f) {
+                        const float sc = std::sqrt(0.78f / xy2);
+                        nx *= sc; ny *= sc;
+                    }
+                    const float nz = std::sqrt(std::max(0.22f, 1.0f - nx * nx - ny * ny));
+
+                    const float cyl = 0.78f + 0.22f * std::sqrt(std::max(0.0f, 1.0f - s * s));
+                    // Warm golden-olive young pine shoot candle.
+                    const float lr = (0.28f + 0.12f * t) * cyl;
+                    const float lg = (0.34f + 0.10f * t) * cyl;
+                    const float lb = (0.12f + 0.03f * t) * cyl;
+                    const size_t ci = static_cast<size_t>(y) * W + x;
+                    c.alpha[ci]    = 255;
+                    c.albedo_r[ci] = srgb_byte(lr);
+                    c.albedo_g[ci] = srgb_byte(lg);
+                    c.albedo_b[ci] = srgb_byte(lb);
+                    c.norm_x[ci]   = u8_from_01(nx * 0.5f + 0.5f);
+                    c.norm_y[ci]   = u8_from_01(ny * 0.5f + 0.5f);
+                    c.norm_z[ci]   = u8_from_01(nz * 0.5f + 0.5f);
+                    c.rough[ci]    = u8_from_01(0.78f);
+                    c.trans[ci]    = u8_from_01(0.24f + 0.14f * t);
+                    owner[ci]      = my_tag;
+                }
+            }
+        }
+
+        // Cells (2, 1) and (3, 1): Enriched Asymmetric Pine Bough Fan (2,1) and
+        // Multi-Shoot Conifer Spray with Apical Candles (3,1).
         CellChannels bake_pine_whorl_cell(int variant_row, const std::array<int, 2>& cluster_cell_grid) {
             CellChannels c;
             std::vector<uint8_t> owner(CellChannels::N, 0);
             const float gscale = sprig_grid_scale(cluster_cell_grid);
 
             pcg32 rng;
-            rng.seed(static_cast<uint64_t>(variant_row) * 97ULL + 0x91'4E'00ULL, 0xB0'7A'02'5E'EDULL);
+            rng.seed(static_cast<uint64_t>(variant_row) * 137ULL + 0x91'4E'C0'41ULL, 0xB0'7A'02'5E'EDULL);
             auto rand_sym = [&]() -> float { return rng.next_float_01() * 2.0f - 1.0f; };
             constexpr LinearRgb pine_base = k_leaf_color[int(LeafShape::PineNeedle)];
 
-            auto add_tuft = [&](int sc_id, vec2 anchor, float base_deg, int needles,
-                                float spread_deg, float len_min, float len_max, float warmth) {
-                for (int k = 0; k < needles; ++k) {
-                    const float frac = (needles == 1) ? 0.0f
-                        : (static_cast<float>(k) / static_cast<float>(needles - 1) - 0.5f);
-                    const float ang = (base_deg + frac * spread_deg + rand_sym() * 9.0f) * k_deg;
-                    const float len = (len_min + (len_max - len_min) * (0.5f + 0.5f * rand_sym())) * gscale;
-                    const float hw  = (3.4f + rand_sym() * 0.6f) * std::max(0.65f, gscale);
-                    const float luma = 1.0f + rand_sym() * 0.14f;
-                    const LinearRgb col{
-                        pine_base.r * luma * (1.0f + 0.18f * warmth),
-                        pine_base.g * luma * (1.0f + 0.12f * warmth),
-                        pine_base.b * luma * (1.0f - 0.10f * warmth),
-                    };
-                    const vec2 jit_base{ anchor.x + rand_sym() * 5.0f, anchor.y + rand_sym() * 5.0f };
-                    const float tilt = rand_sym() * 0.30f;
-                    const float ro = 0.72f + rand_sym() * 0.07f;
-                    const float tr = 0.58f + rand_sym() * 0.10f;
-                    stamp_pine_needle(c, &owner, jit_base, ang, len, hw, col, tilt, ro, tr,
-                                      /*wrap_v=*/false, /*respect_sprig_mask=*/true, sc_id);
+            // Stamp a short woody conifer shoot spine + deep-shadow interior needles +
+            // lush mid/sunlit outer needles inside one sub-cluster.
+            auto add_pine_rosette = [&](int sc_id, vec2 twig_start, vec2 anchor,
+                                        float base_deg, int needles, float spread_deg,
+                                        float len_min, float len_max, float warmth, float luma_bias) {
+                // Woody shoot stub underneath needle rosette.
+                stamp_petiole_stub(c, owner, twig_start, anchor, 3.2f * std::max(0.70f, gscale), sc_id);
+
+                // Two depth passes: darker inner shadow needles first, brighter sunlit outer needles on top.
+                const int inner_count = needles / 2;
+                for (int pass = 0; pass < 2; ++pass) {
+                    const int k0 = (pass == 0) ? 0 : inner_count;
+                    const int k1 = (pass == 0) ? inner_count : needles;
+                    const float pass_luma = (pass == 0) ? 0.76f : 1.10f;
+                    const float pass_warm = (pass == 0) ? (warmth * 0.45f) : warmth;
+                    for (int k = k0; k < k1; ++k) {
+                        const int local_n = std::max(1, k1 - k0);
+                        const float frac = (local_n == 1) ? 0.0f
+                            : (static_cast<float>(k - k0) / static_cast<float>(local_n - 1) - 0.5f);
+                        const float ang = (base_deg + frac * spread_deg + rand_sym() * 11.0f) * k_deg;
+                        const float len = (len_min + (len_max - len_min) * (0.5f + 0.5f * rand_sym())) * gscale;
+                        const float hw  = (3.8f + rand_sym() * 0.75f) * std::max(0.68f, gscale);
+                        const float luma = luma_bias * pass_luma * (1.0f + rand_sym() * 0.16f);
+                        const LinearRgb col{
+                            pine_base.r * luma * (1.0f + 0.24f * pass_warm),
+                            pine_base.g * luma * (1.0f + 0.14f * pass_warm),
+                            pine_base.b * luma * (1.0f - 0.12f * pass_warm),
+                        };
+                        const float along_twig = (pass == 0) ? 0.35f : 0.85f;
+                        const vec2 stem_pt{
+                            twig_start.x + (anchor.x - twig_start.x) * along_twig + rand_sym() * 6.0f,
+                            twig_start.y + (anchor.y - twig_start.y) * along_twig + rand_sym() * 6.0f,
+                        };
+                        const float tilt = rand_sym() * 0.28f;
+                        const float ro = (pass == 0 ? 0.78f : 0.70f) + rand_sym() * 0.06f;
+                        const float tr = (pass == 0 ? 0.46f : 0.64f) + rand_sym() * 0.09f;
+                        stamp_pine_needle(c, &owner, stem_pt, ang, len, hw, col, tilt, ro, tr,
+                                          /*wrap_v=*/false, /*respect_sprig_mask=*/true, sc_id);
+                    }
                 }
             };
 
             if (variant_row == 2) {
-                // Pine Whorl Tuft A: 4 organic overlapping needle bough tufts around a central whorl.
-                add_tuft(0, vec2{128.0f, 114.0f},  -88.0f, 10, 128.0f, 54.0f, 78.0f, 0.58f);
-                add_tuft(1, vec2{112.0f, 128.0f},  190.0f,  9, 118.0f, 52.0f, 74.0f, 0.32f);
-                add_tuft(2, vec2{146.0f, 128.0f},  -12.0f,  9, 118.0f, 52.0f, 74.0f, 0.32f);
-                add_tuft(3, vec2{126.0f, 146.0f},   92.0f,  9, 120.0f, 48.0f, 70.0f, 0.16f);
+                // Cell (2,1): Asymmetric Pine Bough Fan — central bough rosette crossing
+                // the cell core flanked by 3 asymmetric outer sub-boughs (rich evergreen
+                // depth, sunlit outer tips, zero hollow center, crisp 2-px organic gaps).
+                add_pine_rosette(0, vec2{122.0f, 134.0f}, vec2{128.0f, 122.0f},  -62.0f, 20, 220.0f, 46.0f, 78.0f, 0.56f, 1.04f);
+                add_pine_rosette(3, vec2{ 98.0f, 168.0f}, vec2{ 84.0f, 150.0f},  144.0f, 17, 158.0f, 44.0f, 74.0f, 0.22f, 0.88f);
+                add_pine_rosette(2, vec2{148.0f, 162.0f}, vec2{164.0f, 146.0f},   18.0f, 17, 158.0f, 46.0f, 76.0f, 0.36f, 0.96f);
+                add_pine_rosette(1, vec2{144.0f, 108.0f}, vec2{158.0f,  88.0f},  -42.0f, 17, 154.0f, 44.0f, 74.0f, 0.80f, 1.12f);
             } else {
-                // Pine Whorl Tuft B: 3 asymmetric terminal pine candle shoots.
-                add_tuft(0, vec2{130.0f, 110.0f},  -80.0f, 11, 130.0f, 56.0f, 80.0f, 0.82f);
-                add_tuft(1, vec2{108.0f, 136.0f},  202.0f,  9, 114.0f, 50.0f, 72.0f, 0.36f);
-                add_tuft(2, vec2{150.0f, 138.0f},  -20.0f,  9, 114.0f, 50.0f, 72.0f, 0.36f);
+                // Cell (3,1): Asymmetric Multi-Shoot Conifer Spray + Sunlit Apical Candles —
+                // central core shoot + 3 uneven lateral shoots and warm young candle buds.
+                add_pine_rosette(0, vec2{124.0f, 132.0f}, vec2{118.0f, 106.0f},  -98.0f, 20, 215.0f, 46.0f, 80.0f, 0.82f, 1.12f);
+                add_pine_rosette(3, vec2{136.0f, 174.0f}, vec2{148.0f, 158.0f},   68.0f, 16, 156.0f, 42.0f, 72.0f, 0.26f, 0.88f);
+                add_pine_rosette(2, vec2{ 96.0f, 142.0f}, vec2{ 80.0f, 124.0f},  196.0f, 17, 162.0f, 46.0f, 76.0f, 0.44f, 0.98f);
+                add_pine_rosette(1, vec2{152.0f, 126.0f}, vec2{168.0f, 108.0f},  -20.0f, 16, 154.0f, 44.0f, 74.0f, 0.68f, 1.06f);
+
+                // Warm golden-olive apical pine candles tipping the young outer shoots.
+                stamp_pine_candle(c, owner, vec2{118.0f, 106.0f}, -94.0f * k_deg, 24.0f * gscale, 4.4f * std::max(0.7f, gscale), 0);
+                stamp_pine_candle(c, owner, vec2{168.0f, 108.0f}, -24.0f * k_deg, 20.0f * gscale, 3.8f * std::max(0.7f, gscale), 1);
+                stamp_pine_candle(c, owner, vec2{ 80.0f, 124.0f}, 202.0f * k_deg, 19.0f * gscale, 3.8f * std::max(0.7f, gscale), 2);
             }
 
             dilate_cell_channels(c, 6, K_LEAF_CELL_PAD_PX);

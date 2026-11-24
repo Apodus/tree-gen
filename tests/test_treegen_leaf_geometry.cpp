@@ -718,6 +718,44 @@ TEST_CASE("treegen_leaf_geometry: branch-strip TBN is orthonormal and non-degene
         REQUIRE(std::abs(TdotN) < 1e-5f);
         REQUIRE(B_len > 0.99f);
     }
+
+    // True face-perpendicular normal seal: N must be orthogonal to BOTH quad edges
+    // (v1 - v0) and (v3 - v0) on every strip quad (catches in-plane strip_perp bug),
+    // and UVs must remain strictly inside cell (1,1) even when seg_len > strip_width_m.
+    constexpr float cell_uv = 1.0f / static_cast<float>(treegen::K_LEAF_ATLAS_DIM);
+    constexpr float pad_uv  = static_cast<float>(treegen::K_LEAF_CELL_PAD_PX)
+                            / static_cast<float>(treegen::K_LEAF_ATLAS_PX);
+    const float u_lo = static_cast<float>(treegen::K_NEEDLE_STRIP_CELL_COL) * cell_uv + pad_uv;
+    const float u_hi = u_lo + (cell_uv - 2.0f * pad_uv);
+    const float v_lo = static_cast<float>(treegen::K_NEEDLE_STRIP_CELL_ROW) * cell_uv + pad_uv;
+    const float v_hi = v_lo + (cell_uv - 2.0f * pad_uv);
+
+    for (size_t q = 0; q < n_verts; q += 4) {
+        auto pos = [&](size_t idx) {
+            return treegen::vec3{out.positions[idx * 3 + 0], out.positions[idx * 3 + 1], out.positions[idx * 3 + 2]};
+        };
+        const treegen::vec3 v0 = pos(q + 0);
+        const treegen::vec3 v1 = pos(q + 1);
+        const treegen::vec3 v3 = pos(q + 3);
+        const treegen::vec3 e01 = treegen::normalized(v1 - v0);
+        const treegen::vec3 e03 = treegen::normalized(v3 - v0);
+        const treegen::vec3 N{out.normals[q * 3 + 0], out.normals[q * 3 + 1], out.normals[q * 3 + 2]};
+        const treegen::vec3 T{out.tangents[q * 4 + 0], out.tangents[q * 4 + 1], out.tangents[q * 4 + 2]};
+
+        INFO("quad=" << (q / 4) << " N.e01=" << treegen::dot(N, e01) << " N.e03=" << treegen::dot(N, e03));
+        REQUIRE(std::abs(treegen::dot(N, e01)) < 1e-4f);
+        REQUIRE(std::abs(treegen::dot(N, e03)) < 1e-4f);
+        REQUIRE(treegen::dot(T, e01) > 0.999f);
+
+        for (size_t k = 0; k < 4; ++k) {
+            const float u = out.uvs[(q + k) * 2 + 0];
+            const float v = out.uvs[(q + k) * 2 + 1];
+            REQUIRE(u >= u_lo - 1e-6f);
+            REQUIRE(u <= u_hi + 1e-6f);
+            REQUIRE(v >= v_lo - 1e-6f);
+            REQUIRE(v <= v_hi + 1e-6f);
+        }
+    }
 }
 
 TEST_CASE("treegen_leaf_geometry: tris_per_leaf SoT matches emitter output",
@@ -918,6 +956,93 @@ TEST_CASE("treegen_leaf_geometry: ClusterCard emits 3x4-vert sprig bouquet with 
     INFO("sprig bouquet 3D isotropy min/max=" << isotropy << " (min=" << min_proj << " max=" << max_proj << ")");
     // Beats tree-budget G3a isotropy floor (>= 0.35) even with 38 deg phototropic cone tilt cap.
     REQUIRE(isotropy >= 0.35f);
+}
+
+TEST_CASE("treegen_leaf_geometry: ClusterCard Pine samples strictly rows {2, 3} (never strip cell (1,1))",
+          "[treegen][treegen_leaf_geometry][treegen_pine_bouquet]") {
+    // Use 16 sites to cover all 4 pine variant combos and both U-mirror arms.
+    std::vector<treegen::LeafSite> sites;
+    for (int i = 0; i < 16; ++i) {
+        const float ang = static_cast<float>(i) * 0.39269908f;
+        treegen::LeafSite s;
+        s.position = treegen::vec3{std::cos(ang), std::sin(ang), 5.0f + 0.25f * static_cast<float>(i)};
+        s.normal   = treegen::normalized(treegen::vec3{std::cos(ang), std::sin(ang), 0.3f});
+        s.branch_id = i + 1;
+        s.type = static_cast<int>(treegen::LeafShape::PineNeedle);
+        sites.push_back(s);
+    }
+
+    treegen::LeafMeshOptions opts;
+    opts.geometry_type         = treegen::LeafGeometryType::ClusterCard;
+    opts.shape                 = treegen::LeafShape::PineNeedle;
+    opts.leaf_size_m           = 0.68f;
+    opts.cluster_count_per_tip = 3;
+    opts.bend_half_angle       = 0.6457718f;
+
+    auto out = treegen::build_leaf_mesh(sites, opts);
+    REQUIRE(out.positions.size() / 3 == sites.size() * 12);
+    REQUIRE(out.indices.size()       == sites.size() * 18);
+
+    constexpr float cell_size_uv = 1.0f / static_cast<float>(treegen::K_LEAF_ATLAS_DIM);
+    constexpr float pad_uv       = static_cast<float>(treegen::K_LEAF_CELL_PAD_PX)
+                                 / static_cast<float>(treegen::K_LEAF_ATLAS_PX);
+    constexpr float usable_uv    = cell_size_uv - 2.0f * pad_uv;
+    const float u0 = static_cast<float>(treegen::leaf_cluster_cell_col(treegen::LeafShape::PineNeedle))
+                     * cell_size_uv + pad_uv;
+    const float u1 = u0 + usable_uv;
+    const float min_dot_outward = std::cos(treegen::K_MAX_SPRIG_CONE_TILT_RAD) - 1e-4f;
+
+    int row_counts[4] = {0, 0, 0, 0};
+    int mirrored = 0, unmirrored = 0;
+
+    for (size_t si = 0; si < sites.size(); ++si) {
+        const treegen::vec3 site_n = treegen::normalized(sites[si].normal);
+        treegen::vec3 card_centroids[3]{};
+        for (int k = 0; k < 3; ++k) {
+            const size_t base = si * 12 + static_cast<size_t>(k) * 4;
+            treegen::vec3 c{0.0f, 0.0f, 0.0f};
+            for (int v = 0; v < 4; ++v) {
+                c.x += out.positions[(base + v) * 3 + 0];
+                c.y += out.positions[(base + v) * 3 + 1];
+                c.z += out.positions[(base + v) * 3 + 2];
+            }
+            card_centroids[k] = treegen::vec3{c.x * 0.25f, c.y * 0.25f, c.z * 0.25f};
+
+            const treegen::vec3 n0{out.normals[base * 3 + 0], out.normals[base * 3 + 1], out.normals[base * 3 + 2]};
+            REQUIRE(std::abs(vlen(n0) - 1.0f) < 1e-4f);
+            REQUIRE(treegen::dot(n0, site_n) >= min_dot_outward);
+
+            const int row = static_cast<int>(out.uvs[base * 2 + 1] / cell_size_uv);
+            INFO("site=" << si << " card=" << k << " row=" << row);
+            // Pine ClusterCard MUST NEVER sample row 1 (un-recessed BranchStrip cell (1,1))!
+            REQUIRE((row == 2 || row == 3));
+            ++row_counts[row];
+
+            const float v0 = static_cast<float>(row) * cell_size_uv + pad_uv;
+            const float v1 = v0 + usable_uv;
+            for (int v = 0; v < 4; ++v) {
+                const float u  = out.uvs[(base + v) * 2 + 0];
+                const float vv = out.uvs[(base + v) * 2 + 1];
+                REQUIRE(u  >= u0 - 1e-6f);
+                REQUIRE(u  <= u1 + 1e-6f);
+                REQUIRE(vv >= v0 - 1e-6f);
+                REQUIRE(vv <= v1 + 1e-6f);
+            }
+
+            const float du01 = out.uvs[(base + 1) * 2 + 0] - out.uvs[(base + 0) * 2 + 0];
+            const float tw   = out.tangents[base * 4 + 3];
+            if (du01 < 0.0f) { REQUIRE(tw == -1.0f); ++mirrored; }
+            else             { REQUIRE(tw == +1.0f); ++unmirrored; }
+        }
+        for (int k = 1; k < 3; ++k) {
+            REQUIRE(vlen(card_centroids[k] - card_centroids[0]) < 1e-5f);
+        }
+    }
+    REQUIRE(row_counts[1] == 0);
+    REQUIRE(row_counts[2] > 0);
+    REQUIRE(row_counts[3] > 0);
+    REQUIRE(mirrored > 0);
+    REQUIRE(unmirrored > 0);
 }
 
 TEST_CASE("treegen_leaf_geometry: strip angular separation is pi/N",

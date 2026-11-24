@@ -106,14 +106,17 @@ namespace treegen {
 
     // Map strip-local (u, v) in [0,1]^2 to atlas UV for the needle-strip cell.
     // u spans across needles (width), v spans along the branch (tiling length).
+    // Both u and v are clamped to [0, 1] so strip UVs never bleed into Row 2.
     constexpr vec2 needle_strip_tile_uv(float u, float v) {
+        const float cu           = u < 0.0f ? 0.0f : (u > 1.0f ? 1.0f : u);
+        const float cv           = v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
         const float cell_size_uv = 1.0f / static_cast<float>(K_LEAF_ATLAS_DIM);
         const float pad_uv       = static_cast<float>(K_LEAF_CELL_PAD_PX)
                                  / static_cast<float>(K_LEAF_ATLAS_PX);
         const float usable_uv    = cell_size_uv - 2.0f * pad_uv;
         return vec2{
-            static_cast<float>(K_NEEDLE_STRIP_CELL_COL) * cell_size_uv + pad_uv + u * usable_uv,
-            static_cast<float>(K_NEEDLE_STRIP_CELL_ROW) * cell_size_uv + pad_uv + v * usable_uv,
+            static_cast<float>(K_NEEDLE_STRIP_CELL_COL) * cell_size_uv + pad_uv + cu * usable_uv,
+            static_cast<float>(K_NEEDLE_STRIP_CELL_ROW) * cell_size_uv + pad_uv + cv * usable_uv,
         };
     }
 

@@ -113,15 +113,30 @@ TEST_CASE("[treegen_overrides] cluster_cell_grid [6, 2] lowers alpha coverage", 
 }
 
 TEST_CASE("[treegen_overrides] site-based overrides are refused on branch_strip", "[treegen][treegen_overrides]") {
+    // Construct a synthetic branch_strip scenario JSON (patching geometry_type
+    // on a copy of c3_pine.json) so K17's refusal stays strictly tested even
+    // though c3_pine.json ships with cluster_card.
+    auto with_branch_strip_field = [](const std::string& field) {
+        std::string text = scenario_text("pine");
+        const size_t gpos = text.find("\"cluster_card\"");
+        REQUIRE(gpos != std::string::npos);
+        text.replace(gpos, std::string("\"cluster_card\"").size(), "\"branch_strip\"");
+        const size_t at = text.find("\"leaves\": {");
+        REQUIRE(at != std::string::npos);
+        text.insert(at + std::string("\"leaves\": {").size(), "\n    " + field);
+        return treegen::parse_scenario(text, "synthetic_branch_strip + " + field);
+    };
+
     for (const char* field : {"\"shell_fraction\": 0.30,", "\"lod_leaf_triangle_budget\": [100, 100, 100, 0],"}) {
         INFO(field);
         try {
-            (void)with_leaves_fields("pine", field);
+            (void)with_branch_strip_field(field);
             FAIL("accepted on a branch_strip scenario");
         } catch (const std::runtime_error& e) {
             CHECK(std::string(e.what()).find("branch_strip") != std::string::npos);
         }
     }
-    // The grid is not site-based: accepted on pine.
+    // The grid is not site-based: accepted on both branch_strip and cluster_card pine.
+    CHECK_NOTHROW(with_branch_strip_field("\"cluster_cell_grid\": [6, 2],"));
     CHECK_NOTHROW(with_leaves_fields("pine", "\"cluster_cell_grid\": [6, 2],"));
 }

@@ -11,23 +11,23 @@
   "junction_shoulder_factor": 0.14,
   "crown_leader_fraction": 0.32,
   "crown_onset_ramp_fraction": 0.10,
-  "trunk_sway_amplitude_m": 0.12,
+  "trunk_sway_amplitude_m": -1,
   "envelope": {
     "shape": "oblate_spheroid",
     "width_m": 2.5,
     "height_ratio": 1.0,
-    "top_height_ratio": 1.05
+    "top_height_ratio": 1.0
   },
   "branching": {
-    "attractor_count": 165,
-    "kill_distance": 0.24,
-    "growth_distance": 0.15,
+    "attractor_count": 112,
+    "kill_distance": 0.26,
+    "growth_distance": 0.16,
     "max_iterations": 240,
     "branch_angle_jitter_deg": 22.0,
     "min_attractors_to_split": 3,
     "tropism_strength": 1.0,
     "angular_spread_split_deg": 36.0,
-    "crown_base_fraction": 0.15,
+    "crown_base_fraction": 0.16,
     "min_branch_radius_m": 0.005
   },
   "tropisms": {
@@ -38,10 +38,10 @@
   "leaves": {
     "geometry_type": "cluster_card",
     "shape": "oak_lobed",
-    "leaf_size_m": 0.30,
+    "leaf_size_m": 0.32,
     "cluster_count_per_tip": 3,
     "leaf_min_branch_depth": 1,
-    "leaf_density_per_meter": 9.0,
+    "leaf_density_per_meter": 10.5,
     "leaf_depth_density_curve": 1.0,
     "leaf_phototropic_bias": 0.65,
     "leaf_bend_half_angle": 0.42,

@@ -11,6 +11,7 @@
 #include "../generate_tree.hpp"
 #include "../json_reader.hpp"
 #include "../scenario.hpp"
+#include "../species_registry.hpp"
 
 #include <filesystem>
 #include <fstream>
@@ -65,20 +66,21 @@ double alpha_coverage(const treegen::GeneratedTree& g) {
 
 }  // namespace
 
-TEST_CASE("[treegen_overrides] absent in every tracked scenario; explicit defaults change no byte",
+TEST_CASE("[treegen_overrides] absent in every canonical tree scenario; explicit defaults change no byte",
           "[treegen][treegen_overrides]") {
     namespace tsp = rynx::test_support;
     int scenarios = 0;
-    for (const auto& e : std::filesystem::directory_iterator(tsp::treegen_root() / "scenarios")) {
-        if (e.path().extension() != ".json") continue;
-        std::ifstream f(e.path(), std::ios::binary);
+    for (const auto& name : treegen::get_species_names()) {
+        const std::string path = tsp::treegen_file("scenarios/c3_" + name + ".json");
+        REQUIRE_FALSE(path.empty());
+        std::ifstream f(path, std::ios::binary);
         const std::string text((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-        INFO(e.path().filename().string());
+        INFO("c3_" << name << ".json");
         for (const char* key : {"lod_leaf_triangle_budget", "shell_fraction", "cluster_cell_grid"})
             CHECK(text.find(key) == std::string::npos);
         ++scenarios;
     }
-    CHECK(scenarios >= 4);
+    CHECK(scenarios == 4);
     // Absent = the extraction table ([treegen_generate_tree]). Present at the
     // defaults = the same bytes.
     const treegen::Scenario s = with_leaves_fields(

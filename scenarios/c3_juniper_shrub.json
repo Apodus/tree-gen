@@ -3,7 +3,7 @@
   "name": "juniper_shrub_default",
   "species": "juniper_shrub",
   "seed": 0,
-  "height_m": 1.45,
+  "height_m": 1.65,
   "trunk_base_radius_m": 0.055,
   "taper_exponent": 1.8,
   "trunk_taper_rate": 0.55,
@@ -11,40 +11,40 @@
   "junction_shoulder_factor": 0.10,
   "crown_leader_fraction": 0.28,
   "crown_onset_ramp_fraction": 0.08,
-  "trunk_sway_amplitude_m": 0.10,
+  "trunk_sway_amplitude_m": -1,
   "envelope": {
     "shape": "oblate_spheroid",
-    "width_m": 2.1,
+    "width_m": 2.2,
     "height_ratio": 1.0,
-    "top_height_ratio": 0.88
+    "top_height_ratio": 0.90
   },
   "branching": {
-    "attractor_count": 135,
-    "kill_distance": 0.19,
-    "growth_distance": 0.12,
+    "attractor_count": 112,
+    "kill_distance": 0.21,
+    "growth_distance": 0.14,
     "max_iterations": 220,
-    "branch_angle_jitter_deg": 28.0,
+    "branch_angle_jitter_deg": 22.0,
     "min_attractors_to_split": 3,
     "tropism_strength": 1.0,
-    "angular_spread_split_deg": 42.0,
-    "crown_base_fraction": 0.24,
+    "angular_spread_split_deg": 38.0,
+    "crown_base_fraction": 0.23,
     "min_branch_radius_m": 0.004
   },
   "tropisms": {
-    "gravitropism": 0.03,
+    "gravitropism": 0.09,
     "phototropism": 0.0,
     "light_dir": [0.0, 0.0, 1.0]
   },
   "leaves": {
     "geometry_type": "cluster_card",
     "shape": "pine_needle",
-    "leaf_size_m": 0.28,
+    "leaf_size_m": 0.32,
     "cluster_count_per_tip": 3,
     "leaf_min_branch_depth": 1,
-    "leaf_density_per_meter": 13.0,
+    "leaf_density_per_meter": 14.0,
     "leaf_depth_density_curve": 0.8,
-    "leaf_phototropic_bias": 0.35,
-    "leaf_bend_half_angle": 0.48,
+    "leaf_phototropic_bias": 0.60,
+    "leaf_bend_half_angle": 0.45,
     "lod_leaf_triangle_budget": [2400, 1400, 700, 0],
     "shell_fraction": 0.18
   }

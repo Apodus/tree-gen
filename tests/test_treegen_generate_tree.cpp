@@ -32,16 +32,17 @@ struct GlbRow {
     uint64_t    fnv1a64;  // det_rng.hpp fnv1a64 over the GLB bytes
 };
 
-// Pine Uplift Pass regenerated table (over Botanical Leaf Sprigs + Bark B-1):
-// - Enriched Pine whorl bouquet cells (2,1) & (3,1) in the shared 1024^2 leaf atlas
-//   (oak/maple/birch geometry, bark, crown volumes, and atlas cols 0/2/3 are 100%
-//    byte-identical; broadleaf GLB byte delta is strictly +87,680 B from shared atlas PNGs)
-// - Asymmetric conical pine skeleton + ClusterCard 3x4-vert pine bouquets on rows {2, 3}
-constexpr std::array<GlbRow, 4> k_glb_table = {{
-    {"oak",   42, 6250136, 0x4c707f7ae43a8902ull},
-    {"maple", 42, 7197988, 0xb1301f97d81d5a9dull},
-    {"birch", 42, 5457512, 0x44d6a83bc2c53d13ull},
-    {"pine",  42, 5522056, 0xb8e5f82fd973d76full},
+// Pine Uplift Pass + NH-2 Mid-Story Boreal Shrubs regenerated table:
+// - 4 canonical tree species (oak/maple/birch/pine) unchanged from 30ad0b3
+// - 2 mid-story boreal shrub scenarios (juniper_shrub, alder_shrub; not in
+//   get_species_names() so 4-species TestTreegenRender goldens stay untouched)
+constexpr std::array<GlbRow, 6> k_glb_table = {{
+    {"oak",           42, 6250136, 0x4c707f7ae43a8902ull},
+    {"maple",         42, 7197988, 0xb1301f97d81d5a9dull},
+    {"birch",         42, 5457512, 0x44d6a83bc2c53d13ull},
+    {"pine",          42, 5522056, 0xb8e5f82fd973d76full},
+    {"juniper_shrub", 42, 4839660, 0xc942dee077ccbef2ull},
+    {"alder_shrub",   42, 4572456, 0xfff33ead0eb25c31ull},
 }};
 
 uint64_t glb_fnv(const std::vector<uint8_t>& b) {
@@ -73,7 +74,7 @@ TEST_CASE("[treegen_generate_tree] generate_tree reproduces the tool's GLB bytes
         CHECK(species_at_42.count(stem.substr(3)) == 1);
     }
     CHECK(tree_scenarios == static_cast<int>(species_at_42.size()));
-    REQUIRE(species_at_42.size() == 4u);
+    REQUIRE(species_at_42.size() == 6u);
 
     for (const auto& r : k_glb_table) {
         const treegen::GeneratedTree& g = tsp::generated_tree(r.species, r.seed);

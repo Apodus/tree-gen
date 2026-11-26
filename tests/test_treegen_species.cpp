@@ -15,6 +15,7 @@
 
 #include "../external/catch2/catch.hpp"
 
+#include "generated_trees.hpp"
 #include "test_support_paths.hpp"
 
 #include "../envelopes.hpp"
@@ -224,14 +225,18 @@ TEST_CASE("treegen_species: mid-story boreal shrub fixtures (juniper_shrub, alde
     struct ShrubFixture {
         const char* scenario_filename;
         const char* species_name;
-        const char* dedup_parent_scenario;
-        float       min_height_m;
-        float       max_height_m;
+        const char* dedup_parent_species;
+        float       min_mesh_height_m;
+        float       max_mesh_height_m;
+        float       min_mesh_width_m;
+        float       max_mesh_width_m;
     };
     constexpr std::array<ShrubFixture, 2> k_shrubs = {{
-        {"c3_juniper_shrub.json", "juniper_shrub", "c3_pine.json", 1.1f, 1.8f},
-        {"c3_alder_shrub.json",   "alder_shrub",   "c3_oak.json",  1.9f, 2.8f},
+        {"c3_juniper_shrub.json", "juniper_shrub", "pine", 1.4f, 2.2f, 2.0f, 3.2f},
+        {"c3_alder_shrub.json",   "alder_shrub",   "oak",  2.0f, 2.8f, 2.3f, 3.3f},
     }};
+    constexpr std::array<uint64_t, 4> k_shipped_seeds = {7ull, 42ull, 123ull, 999ull};
+    constexpr std::array<size_t, 3>   k_bark_tri_caps = {10000u, 4000u, 1200u};
 
     for (const auto& sf : k_shrubs) {
         INFO("shrub=" << sf.species_name);
@@ -241,52 +246,92 @@ TEST_CASE("treegen_species: mid-story boreal shrub fixtures (juniper_shrub, alde
         const treegen::Scenario s = treegen::load_scenario(fixture);
         REQUIRE(s.kind == "tree");
         REQUIRE(s.tree.species == sf.species_name);
-        REQUIRE(s.tree.height_m >= sf.min_height_m);
-        REQUIRE(s.tree.height_m <= sf.max_height_m);
 
-        const uint64_t seed_effective = 42ull ^ s.scenario_fnv;
-        const treegen::TreeSkeleton skel1 = treegen::grow_skeleton(s.tree, seed_effective);
-        const treegen::TreeSkeleton skel2 = treegen::grow_skeleton(s.tree, seed_effective);
-        REQUIRE(treegen::dump_skeleton_json(skel1) == treegen::dump_skeleton_json(skel2));
+        // Reuse the cached canonical parent tree (seed 42) for byte-exact 8-PNG dedup.
+        const treegen::GeneratedTree& parent = ts::generated_tree(sf.dedup_parent_species, 42ull);
+        REQUIRE(parent.images.size() == 8u);
 
-        const int tip_count = run_generic_invariants(s, skel1);
-        REQUIRE(tip_count >= 1);
+        for (uint64_t seed : k_shipped_seeds) {
+            INFO("seed=" << seed);
+            const uint64_t seed_effective = seed ^ s.scenario_fnv;
+            const treegen::TreeSkeleton skel1 = treegen::grow_skeleton(s.tree, seed_effective);
+            if (seed == 42ull) {
+                const treegen::TreeSkeleton skel2 = treegen::grow_skeleton(s.tree, seed_effective);
+                REQUIRE(treegen::dump_skeleton_json(skel1) == treegen::dump_skeleton_json(skel2));
+            }
+            const int tip_count = run_generic_invariants(s, skel1);
+            REQUIRE(tip_count >= 1);
 
-        const int attractors_n = s.tree.branching.attractor_count;
-        REQUIRE(skel1.nodes.size() >= static_cast<size_t>(0.5 * attractors_n));
-        REQUIRE(skel1.nodes.size() <= static_cast<size_t>(5.0 * attractors_n));
+            const int attractors_n = s.tree.branching.attractor_count;
+            REQUIRE(skel1.nodes.size() >= static_cast<size_t>(0.5 * attractors_n));
+            REQUIRE(skel1.nodes.size() <= static_cast<size_t>(5.0 * attractors_n));
 
-        const treegen::GeneratedTree gen = treegen::generate_tree(s, 42ull);
-        REQUIRE(gen.lods.size() == 3u);
-        REQUIRE(gen.lods[0].has_leaves);
-        REQUIRE(!gen.lods[0].indices_u32.empty());
-        REQUIRE(!gen.lods[0].leaf_indices_u32.empty());
-        REQUIRE(gen.crown_volume.has_value());
-        for (int a = 0; a < 3; ++a) {
-            REQUIRE(gen.crown_volume->dims[a] >= 2);
-        }
+            const treegen::GeneratedTree& gen = ts::generated_tree(sf.species_name, seed);
+            REQUIRE(gen.lods.size() == 3u);
+            REQUIRE(gen.capsule.radius > 0.0f);
+            REQUIRE(gen.capsule.half_length > 0.0f);
 
-        // Grounding seal: lowest leaf vertex stays close to root base so
-        // gltf_import_options::ground_align never lifts the stem off the terrain.
-        float bark_zmin = 1e9f;
-        for (size_t i = 2; i < gen.lods[0].mesh.positions.size(); i += 3)
-            bark_zmin = std::min(bark_zmin, gen.lods[0].mesh.positions[i]);
-        float leaf_zmin = 1e9f;
-        for (size_t i = 2; i < gen.lods[0].leaf_positions.size(); i += 3)
-            leaf_zmin = std::min(leaf_zmin, gen.lods[0].leaf_positions[i]);
-        INFO("bark_zmin=" << bark_zmin << " leaf_zmin=" << leaf_zmin);
-        CHECK(leaf_zmin >= bark_zmin - 0.12f);
+            // Per-LOD leaf presence, monotone reduction, and bark/leaf triangle caps.
+            for (size_t li = 0; li < 3u; ++li) {
+                const auto& lod = gen.lods[li];
+                const size_t bark_tris = lod.indices_u32.size() / 3u;
+                const size_t leaf_tris = lod.leaf_indices_u32.size() / 3u;
+                INFO("LOD " << li << " bark_tris=" << bark_tris << " leaf_tris=" << leaf_tris);
+                REQUIRE(lod.has_leaves);
+                REQUIRE(bark_tris > 0u);
+                REQUIRE(leaf_tris > 0u);
+                CHECK(bark_tris <= k_bark_tri_caps[li]);
+                CHECK(leaf_tris <= static_cast<size_t>(s.tree.leaves.lod_leaf_triangle_budget[li]));
+                if (li > 0u) {
+                    CHECK(bark_tris <= gen.lods[li - 1u].indices_u32.size() / 3u);
+                    CHECK(leaf_tris <= gen.lods[li - 1u].leaf_indices_u32.size() / 3u);
+                }
+            }
 
-        // Zero-VRAM dedup seal: every embedded bark + leaf PNG is byte-identical
-        // to the canonical parent species so GPUTextures deduplicates 100%.
-        const auto parent_path = ts::treegen_file(std::string("scenarios/") + sf.dedup_parent_scenario);
-        REQUIRE_FALSE(parent_path.empty());
-        const treegen::GeneratedTree parent = treegen::generate_tree(treegen::load_scenario(parent_path), 42ull);
-        REQUIRE(gen.images.size() == parent.images.size());
-        REQUIRE(gen.images.size() == 8u);
-        for (size_t ii = 0; ii < gen.images.size(); ++ii) {
-            INFO("image_index=" << ii);
-            REQUIRE(gen.images[ii].png_bytes == parent.images[ii].png_bytes);
+            // Actual generated L0 mesh extents (height, width) and skirt-grounding bound.
+            float bark_zmin = 1e9f;
+            for (size_t i = 2; i < gen.lods[0].mesh.positions.size(); i += 3)
+                bark_zmin = std::min(bark_zmin, gen.lods[0].mesh.positions[i]);
+            float lx_min = 1e9f, lx_max = -1e9f, ly_min = 1e9f, ly_max = -1e9f;
+            float leaf_zmin = 1e9f, leaf_zmax = -1e9f;
+            const auto& lp = gen.lods[0].leaf_positions;
+            for (size_t i = 0; i + 2 < lp.size(); i += 3) {
+                lx_min = std::min(lx_min, lp[i + 0]); lx_max = std::max(lx_max, lp[i + 0]);
+                ly_min = std::min(ly_min, lp[i + 1]); ly_max = std::max(ly_max, lp[i + 1]);
+                leaf_zmin = std::min(leaf_zmin, lp[i + 2]); leaf_zmax = std::max(leaf_zmax, lp[i + 2]);
+            }
+            const float mesh_h = leaf_zmax - std::min(bark_zmin, leaf_zmin);
+            const float mesh_w = std::max(lx_max - lx_min, ly_max - ly_min);
+            INFO("mesh_h=" << mesh_h << " mesh_w=" << mesh_w
+                 << " bark_zmin=" << bark_zmin << " leaf_zmin=" << leaf_zmin);
+            CHECK(mesh_h >= sf.min_mesh_height_m);
+            CHECK(mesh_h <= sf.max_mesh_height_m);
+            CHECK(mesh_w >= sf.min_mesh_width_m);
+            CHECK(mesh_w <= sf.max_mesh_width_m);
+            // Skirt-grounding bound: lowest leaf vertex sits within 0.10 m of root
+            // flare so ground_align = true keeps shrub stems visually anchored.
+            CHECK(leaf_zmin >= bark_zmin - 0.10f);
+
+            // Crown volume v2: valid dims, <= 64 KiB brick, encloses L0..L2 leaf AABBs.
+            REQUIRE(gen.crown_volume.has_value());
+            const auto& cv = *gen.crown_volume;
+            size_t voxels = 1u;
+            for (int a = 0; a < 3; ++a) {
+                REQUIRE(cv.dims[a] >= 2);
+                voxels *= static_cast<size_t>(cv.dims[a]);
+            }
+            CHECK(voxels * 8u <= 65536u);
+            CHECK(cv.box_min.x <= lx_min + 1e-4f); CHECK(cv.box_max.x >= lx_max - 1e-4f);
+            CHECK(cv.box_min.y <= ly_min + 1e-4f); CHECK(cv.box_max.y >= ly_max - 1e-4f);
+            CHECK(cv.box_min.z <= leaf_zmin + 1e-4f); CHECK(cv.box_max.z >= leaf_zmax - 1e-4f);
+
+            // Zero-VRAM dedup seal: every embedded bark + leaf PNG is byte-identical
+            // to the canonical parent species so GPUTextures deduplicates 100%.
+            REQUIRE(gen.images.size() == 8u);
+            for (size_t ii = 0; ii < 8u; ++ii) {
+                INFO("image_index=" << ii);
+                REQUIRE(gen.images[ii].png_bytes == parent.images[ii].png_bytes);
+            }
         }
     }
 }

@@ -18,6 +18,7 @@
 #include "test_support_paths.hpp"
 
 #include "../envelopes.hpp"
+#include "../generate_tree.hpp"
 #include "../scenario.hpp"
 #include "../skeleton.hpp"
 #include "../skeleton_json.hpp"
@@ -25,6 +26,7 @@
 #include "../tree_descriptor.hpp"
 #include "../vec3.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -211,6 +213,80 @@ TEST_CASE("treegen_species: per-species invariants on 4 first-ship fixtures",
         } else {
             // Oblate species: tip-set extends to envelope half-width + pad.
             REQUIRE(max_xy_radius <= s.tree.envelope.width_m * 1.05f);
+        }
+    }
+}
+
+TEST_CASE("treegen_species: mid-story boreal shrub fixtures (juniper_shrub, alder_shrub)",
+          "[treegen][treegen_species][shrub_scenarios]") {
+    namespace ts = rynx::test_support;
+
+    struct ShrubFixture {
+        const char* scenario_filename;
+        const char* species_name;
+        const char* dedup_parent_scenario;
+        float       min_height_m;
+        float       max_height_m;
+    };
+    constexpr std::array<ShrubFixture, 2> k_shrubs = {{
+        {"c3_juniper_shrub.json", "juniper_shrub", "c3_pine.json", 1.1f, 1.8f},
+        {"c3_alder_shrub.json",   "alder_shrub",   "c3_oak.json",  1.9f, 2.8f},
+    }};
+
+    for (const auto& sf : k_shrubs) {
+        INFO("shrub=" << sf.species_name);
+        const auto fixture = ts::treegen_file(std::string("scenarios/") + sf.scenario_filename);
+        REQUIRE_FALSE(fixture.empty());
+
+        const treegen::Scenario s = treegen::load_scenario(fixture);
+        REQUIRE(s.kind == "tree");
+        REQUIRE(s.tree.species == sf.species_name);
+        REQUIRE(s.tree.height_m >= sf.min_height_m);
+        REQUIRE(s.tree.height_m <= sf.max_height_m);
+
+        const uint64_t seed_effective = 42ull ^ s.scenario_fnv;
+        const treegen::TreeSkeleton skel1 = treegen::grow_skeleton(s.tree, seed_effective);
+        const treegen::TreeSkeleton skel2 = treegen::grow_skeleton(s.tree, seed_effective);
+        REQUIRE(treegen::dump_skeleton_json(skel1) == treegen::dump_skeleton_json(skel2));
+
+        const int tip_count = run_generic_invariants(s, skel1);
+        REQUIRE(tip_count >= 1);
+
+        const int attractors_n = s.tree.branching.attractor_count;
+        REQUIRE(skel1.nodes.size() >= static_cast<size_t>(0.5 * attractors_n));
+        REQUIRE(skel1.nodes.size() <= static_cast<size_t>(5.0 * attractors_n));
+
+        const treegen::GeneratedTree gen = treegen::generate_tree(s, 42ull);
+        REQUIRE(gen.lods.size() == 3u);
+        REQUIRE(gen.lods[0].has_leaves);
+        REQUIRE(!gen.lods[0].indices_u32.empty());
+        REQUIRE(!gen.lods[0].leaf_indices_u32.empty());
+        REQUIRE(gen.crown_volume.has_value());
+        for (int a = 0; a < 3; ++a) {
+            REQUIRE(gen.crown_volume->dims[a] >= 2);
+        }
+
+        // Grounding seal: lowest leaf vertex stays close to root base so
+        // gltf_import_options::ground_align never lifts the stem off the terrain.
+        float bark_zmin = 1e9f;
+        for (size_t i = 2; i < gen.lods[0].mesh.positions.size(); i += 3)
+            bark_zmin = std::min(bark_zmin, gen.lods[0].mesh.positions[i]);
+        float leaf_zmin = 1e9f;
+        for (size_t i = 2; i < gen.lods[0].leaf_positions.size(); i += 3)
+            leaf_zmin = std::min(leaf_zmin, gen.lods[0].leaf_positions[i]);
+        INFO("bark_zmin=" << bark_zmin << " leaf_zmin=" << leaf_zmin);
+        CHECK(leaf_zmin >= bark_zmin - 0.12f);
+
+        // Zero-VRAM dedup seal: every embedded bark + leaf PNG is byte-identical
+        // to the canonical parent species so GPUTextures deduplicates 100%.
+        const auto parent_path = ts::treegen_file(std::string("scenarios/") + sf.dedup_parent_scenario);
+        REQUIRE_FALSE(parent_path.empty());
+        const treegen::GeneratedTree parent = treegen::generate_tree(treegen::load_scenario(parent_path), 42ull);
+        REQUIRE(gen.images.size() == parent.images.size());
+        REQUIRE(gen.images.size() == 8u);
+        for (size_t ii = 0; ii < gen.images.size(); ++ii) {
+            INFO("image_index=" << ii);
+            REQUIRE(gen.images[ii].png_bytes == parent.images[ii].png_bytes);
         }
     }
 }

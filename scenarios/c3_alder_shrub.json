@@ -1,0 +1,51 @@
+{
+  "kind": "tree",
+  "name": "alder_shrub_default",
+  "species": "alder_shrub",
+  "seed": 42,
+  "height_m": 2.35,
+  "trunk_base_radius_m": 0.075,
+  "taper_exponent": 1.9,
+  "trunk_taper_rate": 0.60,
+  "root_flare_factor": 1.20,
+  "junction_shoulder_factor": 0.14,
+  "crown_leader_fraction": 0.32,
+  "crown_onset_ramp_fraction": 0.10,
+  "trunk_sway_amplitude_m": 0.12,
+  "envelope": {
+    "shape": "oblate_spheroid",
+    "width_m": 2.5,
+    "height_ratio": 1.0,
+    "top_height_ratio": 1.05
+  },
+  "branching": {
+    "attractor_count": 165,
+    "kill_distance": 0.24,
+    "growth_distance": 0.15,
+    "max_iterations": 240,
+    "branch_angle_jitter_deg": 22.0,
+    "min_attractors_to_split": 3,
+    "tropism_strength": 1.0,
+    "angular_spread_split_deg": 36.0,
+    "crown_base_fraction": 0.15,
+    "min_branch_radius_m": 0.005
+  },
+  "tropisms": {
+    "gravitropism": 0.08,
+    "phototropism": 0.0,
+    "light_dir": [0.0, 0.0, 1.0]
+  },
+  "leaves": {
+    "geometry_type": "cluster_card",
+    "shape": "oak_lobed",
+    "leaf_size_m": 0.30,
+    "cluster_count_per_tip": 3,
+    "leaf_min_branch_depth": 1,
+    "leaf_density_per_meter": 9.0,
+    "leaf_depth_density_curve": 1.0,
+    "leaf_phototropic_bias": 0.65,
+    "leaf_bend_half_angle": 0.42,
+    "lod_leaf_triangle_budget": [3000, 1600, 800, 0],
+    "shell_fraction": 0.22
+  }
+}

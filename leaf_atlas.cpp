@@ -600,12 +600,12 @@ namespace treegen {
                     const float ny = -py * cross_s * 0.72f;
                     const float nz = std::sqrt(std::max(0.20f, 1.0f - nx * nx - ny * ny));
 
-                    // Warm woody olive-brown petiole tint.
+                    // Warm woody olive-brown petiole tint (harmonized with NH-2b blue floor).
                     const float shade = 0.72f + 0.28f * (1.0f - std::abs(cross_s));
                     c.alpha[ci]    = 255;
                     c.albedo_r[ci] = srgb_byte(0.18f * shade);
                     c.albedo_g[ci] = srgb_byte(0.17f * shade);
-                    c.albedo_b[ci] = srgb_byte(0.08f * shade);
+                    c.albedo_b[ci] = srgb_byte(0.045f * shade);
                     c.norm_x[ci]   = u8_from_01(nx * 0.5f + 0.5f);
                     c.norm_y[ci]   = u8_from_01(ny * 0.5f + 0.5f);
                     c.norm_z[ci]   = u8_from_01(nz * 0.5f + 0.5f);
@@ -767,12 +767,12 @@ namespace treegen {
                     const float shoot_ao = 0.84f + 0.16f * smoothstep(4.0f, 34.0f, da);
                     lr *= shoot_ao; lg *= shoot_ao; lb *= shoot_ao;
 
-                    // Woody midrib & secondary vein tint.
+                    // Woody midrib & secondary vein tint (harmonized with NH-2b blue floor).
                     if (vn.midrib > 0.01f) {
                         const float m = 0.35f * vn.midrib;
                         lr = lr * (1.0f - m) + (0.28f * lf.luma_mul) * m;
                         lg = lg * (1.0f - m) + (0.27f * lf.luma_mul) * m;
-                        lb = lb * (1.0f - m) + (0.11f * lf.luma_mul) * m;
+                        lb = lb * (1.0f - m) + (0.052f * lf.luma_mul) * m;
                     }
                     const float vein_dark = 1.0f - 0.12f * vn.height;
                     lr *= vein_dark; lg *= vein_dark; lb *= vein_dark;
@@ -1171,10 +1171,10 @@ namespace treegen {
                     const float nz = std::sqrt(std::max(0.22f, 1.0f - nx * nx - ny * ny));
 
                     const float cyl = 0.78f + 0.22f * std::sqrt(std::max(0.0f, 1.0f - s * s));
-                    // Warm golden-olive young pine shoot candle.
-                    const float lr = (0.28f + 0.12f * t) * cyl;
-                    const float lg = (0.34f + 0.10f * t) * cyl;
-                    const float lb = (0.12f + 0.03f * t) * cyl;
+                    // Warm golden-olive young pine shoot candle (harmonized with NH-2b blue floor).
+                    const float lr = (0.24f + 0.10f * t) * cyl;
+                    const float lg = (0.29f + 0.09f * t) * cyl;
+                    const float lb = (0.045f + 0.015f * t) * cyl;
                     const size_t ci = static_cast<size_t>(y) * W + x;
                     c.alpha[ci]    = 255;
                     c.albedo_r[ci] = srgb_byte(lr);

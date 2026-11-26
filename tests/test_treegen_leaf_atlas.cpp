@@ -222,6 +222,7 @@ TEST_CASE("[treegen_leaf_atlas_p3] diffuse within species hue + gradient range",
         const CellRect r = cell_rect(sp);
         const uint8_t base_r = srgb_byte(k_expected[si].r);
         const uint8_t base_g = srgb_byte(k_expected[si].g);
+        const uint8_t base_b = srgb_byte(k_expected[si].b);
 
         // Center probes: must be alpha>0 and within gradient-darkened range.
         const int cx = (r.x0 + r.x1) / 2;
@@ -230,12 +231,19 @@ TEST_CASE("[treegen_leaf_atlas_p3] diffuse within species hue + gradient range",
         REQUIRE(d.bytes[ci + 3] > 0);
         const int pr = d.bytes[ci + 0];
         const int pg = d.bytes[ci + 1];
+        const int pb = d.bytes[ci + 2];
         INFO("species=" << k_species_name[si]
-             << " center rgb=(" << pr << "," << pg << "," << int(d.bytes[ci + 2]) << ")"
-             << " base=(" << int(base_r) << "," << int(base_g) << ")");
+             << " center rgb=(" << pr << "," << pg << "," << pb << ")"
+             << " base=(" << int(base_r) << "," << int(base_g) << "," << int(base_b) << ")");
         // Gradient darkens by up to ~30% at base; center is ~50% through.
         REQUIRE(pr >= int(base_r) * 60 / 100);
         REQUIRE(pr <= int(base_r) + 5);
+        // NH-2b chlorophyll blue-absorption seal: actively enforce k_expected[si].b
+        // and guarantee B stays strictly below R (eliminating legacy Pine B > R cyan).
+        REQUIRE(pb >= int(base_b) * 55 / 100);
+        REQUIRE(pb <= int(base_b) + 5);
+        REQUIRE(pb < pr);
+        REQUIRE(float(pb) / float(pg) <= 0.50f);
         // Hue ratio: G/R should stay close to base G/R (vegetation greens).
         if (base_r > 10 && pr > 10) {
             const float ratio_base = float(base_g) / float(base_r);

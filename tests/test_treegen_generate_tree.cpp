@@ -32,17 +32,16 @@ struct GlbRow {
     uint64_t    fnv1a64;  // det_rng.hpp fnv1a64 over the GLB bytes
 };
 
-// Pine Uplift Pass + NH-2 Mid-Story Boreal Shrubs regenerated table:
-// - 4 canonical tree species (oak/maple/birch/pine) unchanged from 30ad0b3
-// - 2 mid-story boreal shrub scenarios (juniper_shrub, alder_shrub; not in
-//   get_species_names() so 4-species TestTreegenRender goldens stay untouched)
+// NH-2b Boreal Leaf-Atlas Warm-Harmonization regenerated table:
+// - 4 canonical tree species (oak/maple/birch/pine) + 2 mid-story boreal shrubs
+//   (juniper_shrub, alder_shrub) sharing the warm-harmonized leaf atlas PNG (-18,240 B each)
 constexpr std::array<GlbRow, 6> k_glb_table = {{
-    {"oak",           42, 6250136, 0x4c707f7ae43a8902ull},
-    {"maple",         42, 7197988, 0xb1301f97d81d5a9dull},
-    {"birch",         42, 5457512, 0x44d6a83bc2c53d13ull},
-    {"pine",          42, 5522056, 0xb8e5f82fd973d76full},
-    {"juniper_shrub", 42, 4839660, 0xc942dee077ccbef2ull},
-    {"alder_shrub",   42, 4572456, 0xfff33ead0eb25c31ull},
+    {"oak",           42, 6231896, 0x59d2aaff5e861236ull},
+    {"maple",         42, 7179748, 0x1ea837ce8e490094ull},
+    {"birch",         42, 5439272, 0x1aadab18234a3fffull},
+    {"pine",          42, 5503816, 0x8504e5fa33bea4b3ull},
+    {"juniper_shrub", 42, 4821420, 0x36f85e6053ea9fd7ull},
+    {"alder_shrub",   42, 4554216, 0x894dd2bd151b00f5ull},
 }};
 
 uint64_t glb_fnv(const std::vector<uint8_t>& b) {

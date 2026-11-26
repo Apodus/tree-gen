@@ -35,12 +35,15 @@ namespace treegen {
         constexpr float k_deg    = k_pi / 180.0f;
 
         // Linear RGB greens per species (index pinned to LeafShape enum order).
+        // NH-2b Nordic boreal leaf-atlas warm-harmonization: physically grounded
+        // chlorophyll blue absorption (linear B ~0.028..0.072 so blue sky SH9 ambient
+        // does not shift shadowed foliage into cyan-teal) across all 4 boreal species.
         struct LinearRgb { float r, g, b; };
         constexpr LinearRgb k_leaf_color[4] = {
-            /* OakLobed      */ { 0.20f, 0.38f, 0.12f },
-            /* PineNeedle    */ { 0.10f, 0.30f, 0.12f },
-            /* BirchSerrated */ { 0.35f, 0.50f, 0.18f },
-            /* MapleStar     */ { 0.30f, 0.38f, 0.14f },
+            /* OakLobed      */ { 0.205f, 0.275f, 0.038f },
+            /* PineNeedle    */ { 0.145f, 0.215f, 0.028f },
+            /* BirchSerrated */ { 0.320f, 0.415f, 0.072f },
+            /* MapleStar     */ { 0.290f, 0.335f, 0.060f },
         };
         static_assert(int(LeafShape::OakLobed)      == 0, "k_leaf_color index pinned to LeafShape enum order");
         static_assert(int(LeafShape::PineNeedle)    == 1, "k_leaf_color index pinned to LeafShape enum order");

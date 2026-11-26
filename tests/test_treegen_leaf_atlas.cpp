@@ -81,10 +81,10 @@ namespace {
     // Mirror of `k_leaf_color` in leaf_atlas.cpp (single source of truth there;
     // pinned here as the test's expected reference).
     constexpr LinearRgb k_expected[4] = {
-        /* OakLobed      */ { 0.20f, 0.38f, 0.12f },
-        /* PineNeedle    */ { 0.10f, 0.30f, 0.12f },
-        /* BirchSerrated */ { 0.35f, 0.50f, 0.18f },
-        /* MapleStar     */ { 0.30f, 0.38f, 0.14f },
+        /* OakLobed      */ { 0.205f, 0.275f, 0.038f },
+        /* PineNeedle    */ { 0.145f, 0.215f, 0.028f },
+        /* BirchSerrated */ { 0.320f, 0.415f, 0.072f },
+        /* MapleStar     */ { 0.290f, 0.335f, 0.060f },
     };
 
 }  // namespace

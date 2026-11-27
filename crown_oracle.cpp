@@ -813,6 +813,244 @@ FormatDecision decide_format(const std::vector<FormatElevation>& elevations) {
     return d;
 }
 
+// ---- Normals mode (crown-lighting L-P0a, §5.3, §5.5, K17) -------------------
+
+NormalsReport measure_normals(const Probe& probe, const CrownVolume& volume, const ExtinctionModel& model,
+                              float lowpass_sigma_m) {
+    NormalsReport report;
+    const CrownMesh& m = probe.mesh();
+    const size_t n = m.sites.size();
+    report.sites = int(n);
+    report.lowpass_sigma_m = lowpass_sigma_m;
+    report.directions = k_normals_directions;
+    report.neighbours = k_normals_neighbours;
+    report.model = model;
+    if (n == 0) return report;
+
+    // Bounding ellipsoid fitted to the leaf AABB (crown-lighting §5.3).
+    vec3 llo{1e30f, 1e30f, 1e30f}, lhi{-1e30f, -1e30f, -1e30f};
+    for (const Triangle& tr : m.triangles) {
+        if (tr.site < 0) continue;
+        for (const vec3& p : tr.p) {
+            llo = {std::min(llo.x, p.x), std::min(llo.y, p.y), std::min(llo.z, p.z)};
+            lhi = {std::max(lhi.x, p.x), std::max(lhi.y, p.y), std::max(lhi.z, p.z)};
+        }
+    }
+    const vec3 centre = (llo + lhi) * 0.5f;
+    const vec3 semi{
+        std::max(0.5f * (lhi.x - llo.x), 1e-4f),
+        std::max(0.5f * (lhi.y - llo.y), 1e-4f),
+        std::max(0.5f * (lhi.z - llo.z), 1e-4f),
+    };
+
+    report.site_card.resize(n);
+    report.site_ellipsoid.resize(n);
+    report.site_march.resize(n);
+    report.site_neg_grad.resize(n);
+    report.site_inner_half.assign(n, 0);
+
+    std::vector<float> ell_r(n, 0.0f);
+    for (size_t i = 0; i < n; ++i) {
+        const vec3 p = m.sites[i].centroid;
+        const vec3 q{(p.x - centre.x) / semi.x, (p.y - centre.y) / semi.y, (p.z - centre.z) / semi.z};
+        ell_r[i] = length(q);
+        const vec3 g{q.x / semi.x, q.y / semi.y, q.z / semi.z};
+        report.site_ellipsoid[i] = length(g) > 1e-8f ? normalized(g) : vec3{0.0f, 0.0f, 1.0f};
+        const vec3 cn = m.sites[i].normal;
+        report.site_card[i] = length(cn) > 1e-8f ? normalized(cn) : vec3{0.0f, 0.0f, 1.0f};
+    }
+
+    // Inner half: the floor(N / 2) sites with smallest normalised ellipsoid radius
+    // (tie-broken by site index for exact determinism).
+    std::vector<size_t> order(n);
+    std::iota(order.begin(), order.end(), size_t(0));
+    std::sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+        return ell_r[a] < ell_r[b] || (ell_r[a] == ell_r[b] && a < b);
+    });
+    const size_t inner_n = n / 2;
+    report.inner_half_sites = int(inner_n);
+    for (size_t r = 0; r < inner_n; ++r) report.site_inner_half[order[r]] = 1;
+
+    // 64 full-sphere Fibonacci directions (deterministic golden-angle spiral).
+    std::array<vec3, k_normals_directions> dirs;
+    const double golden = k_pi * (3.0 - std::sqrt(5.0));
+    for (int k = 0; k < k_normals_directions; ++k) {
+        const double z = 1.0 - 2.0 * (double(k) + 0.5) / double(k_normals_directions);
+        const double r = std::sqrt(std::max(0.0, 1.0 - z * z));
+        const double ph = golden * double(k);
+        dirs[size_t(k)] = vec3{float(r * std::cos(ph)), float(r * std::sin(ph)), float(z)};
+    }
+
+    // Warm the low-pass cache on the main thread before parallel site marches.
+    if (lowpass_sigma_m > 0.0f)
+        (void)volume.optical_depth(m.sites[0].centroid, dirs[0], lowpass_sigma_m, model);
+
+    // 4 sources: 0 = card, 1 = ellipsoid, 2 = march_lowpass_0_6m, 3 = neg_grad.
+    std::array<std::vector<uint8_t>, 4> in_occluded;
+    for (auto& v : in_occluded) v.assign(n, 0);
+
+    const float h = 0.5f * volume.cell_size();
+    parallel_for(n, [&](size_t i) {
+        const vec3 p = m.sites[i].centroid;
+        std::array<double, k_normals_directions> tau{};
+        double sx = 0.0, sy = 0.0, sz = 0.0;
+        for (int k = 0; k < k_normals_directions; ++k) {
+            const double t = double(volume.optical_depth(p, dirs[size_t(k)], lowpass_sigma_m, model));
+            tau[size_t(k)] = t;
+            const double w = 1.0 / (1.0 + t);
+            sx += w * double(dirs[size_t(k)].x);
+            sy += w * double(dirs[size_t(k)].y);
+            sz += w * double(dirs[size_t(k)].z);
+        }
+        const double sl = std::sqrt(sx * sx + sy * sy + sz * sz);
+        report.site_march[i] = sl > 1e-12
+            ? vec3{float(sx / sl), float(sy / sl), float(sz / sl)}
+            : report.site_ellipsoid[i];
+
+        // -grad: central finite difference of CrownVolume::density(p) at half a cell (§5.5).
+        const float gx = volume.density(vec3{p.x + h, p.y, p.z}) - volume.density(vec3{p.x - h, p.y, p.z});
+        const float gy = volume.density(vec3{p.x, p.y + h, p.z}) - volume.density(vec3{p.x, p.y - h, p.z});
+        const float gz = volume.density(vec3{p.x, p.y, p.z + h}) - volume.density(vec3{p.x, p.y, p.z - h});
+        const vec3 ng{-gx, -gy, -gz};
+        const float ngl = length(ng);
+        report.site_neg_grad[i] = ngl > 1e-8f ? (ng / ngl) : vec3{0.0f, 0.0f, 0.0f};
+
+        const std::array<vec3, 4> cand = {
+            report.site_card[i],
+            report.site_ellipsoid[i],
+            report.site_march[i],
+            report.site_neg_grad[i],
+        };
+        for (size_t s = 0; s < 4; ++s) {
+            const vec3 nd = cand[s];
+            if (dot(nd, nd) < 0.5f) continue;
+            double front_sum = 0.0, back_sum = 0.0;
+            int front_n = 0, back_n = 0;
+            for (int k = 0; k < k_normals_directions; ++k) {
+                const float d = dot(dirs[size_t(k)], nd);
+                if (d > 0.0f)      { front_sum += tau[size_t(k)]; ++front_n; }
+                else if (d < 0.0f) { back_sum  += tau[size_t(k)]; ++back_n; }
+            }
+            if (front_n > 0 && back_n > 0 && (front_sum / double(front_n)) > (back_sum / double(back_n)))
+                in_occluded[s][i] = 1;
+        }
+    });
+
+    // Neighbour agreement: mean dot with k = min(8, N - 1) nearest other sites.
+    const size_t k_nbr = std::min<size_t>(size_t(k_normals_neighbours), n > 0 ? n - 1 : 0);
+    std::array<std::vector<float>, 4> agree;
+    for (auto& v : agree) v.assign(n, 0.0f);
+    if (k_nbr > 0) {
+        const std::array<const std::vector<vec3>*, 4> src_vecs = {
+            &report.site_card,
+            &report.site_ellipsoid,
+            &report.site_march,
+            &report.site_neg_grad,
+        };
+        parallel_for(n, [&](size_t i) {
+            const vec3 pi = m.sites[i].centroid;
+            std::array<std::pair<float, size_t>, k_normals_neighbours> best;
+            size_t count = 0;
+            for (size_t j = 0; j < n; ++j) {
+                if (j == i) continue;
+                const vec3 d = m.sites[j].centroid - pi;
+                const float d2 = dot(d, d);
+                if (count < k_nbr) {
+                    best[count++] = {d2, j};
+                    size_t c = count - 1;
+                    while (c > 0 && (best[c].first < best[c - 1].first ||
+                                     (best[c].first == best[c - 1].first && best[c].second < best[c - 1].second))) {
+                        std::swap(best[c], best[c - 1]);
+                        --c;
+                    }
+                } else if (d2 < best[k_nbr - 1].first ||
+                           (d2 == best[k_nbr - 1].first && j < best[k_nbr - 1].second)) {
+                    best[k_nbr - 1] = {d2, j};
+                    size_t c = k_nbr - 1;
+                    while (c > 0 && (best[c].first < best[c - 1].first ||
+                                     (best[c].first == best[c - 1].first && best[c].second < best[c - 1].second))) {
+                        std::swap(best[c], best[c - 1]);
+                        --c;
+                    }
+                }
+            }
+            for (size_t s = 0; s < 4; ++s) {
+                const auto& nv = *src_vecs[s];
+                double sum = 0.0;
+                for (size_t b = 0; b < count; ++b) sum += double(dot(nv[i], nv[best[b].second]));
+                agree[s][i] = float(sum / double(count));
+            }
+        });
+    }
+
+    auto summarize = [&](size_t s, const std::vector<vec3>& nv) -> NormalSourceStats {
+        NormalSourceStats st;
+        size_t against = 0, inner_against = 0, hollow = 0, inner_hollow = 0, below = 0;
+        double agree_sum = 0.0;
+        for (size_t i = 0; i < n; ++i) {
+            const bool ag = dot(nv[i], report.site_ellipsoid[i]) < 0.0f;
+            const bool hl = in_occluded[s][i] != 0;
+            if (ag) ++against;
+            if (hl) ++hollow;
+            if (nv[i].z < 0.0f) ++below;
+            if (report.site_inner_half[i]) {
+                if (ag) ++inner_against;
+                if (hl) ++inner_hollow;
+            }
+            agree_sum += double(agree[s][i]);
+        }
+        const double p_ag = double(against) / double(n);
+        const double p_hl = double(hollow) / double(n);
+        const double p_bl = double(below) / double(n);
+        st.against_outward_share    = float(p_ag);
+        st.against_outward_share_se = float(detail::se_share(p_ag, n));
+        st.hollow_shell_share       = float(p_hl);
+        st.hollow_shell_share_se    = float(detail::se_share(p_hl, n));
+        st.below_horizontal_share    = float(p_bl);
+        st.below_horizontal_share_se = float(detail::se_share(p_bl, n));
+        if (inner_n > 0) {
+            const double p_iag = double(inner_against) / double(inner_n);
+            const double p_ihl = double(inner_hollow) / double(inner_n);
+            st.inner_half_against_outward_share    = float(p_iag);
+            st.inner_half_against_outward_share_se = float(detail::se_share(p_iag, inner_n));
+            st.inner_half_hollow_shell_share       = float(p_ihl);
+            st.inner_half_hollow_shell_share_se    = float(detail::se_share(p_ihl, inner_n));
+        }
+        st.neighbour_agreement    = k_nbr > 0 ? float(agree_sum / double(n)) : 1.0f;
+        st.neighbour_agreement_se = k_nbr > 0 ? float(detail::se_mean(agree[s])) : 0.0f;
+        return st;
+    };
+
+    report.card               = summarize(0, report.site_card);
+    report.ellipsoid          = summarize(1, report.site_ellipsoid);
+    report.march_lowpass_0_6m = summarize(2, report.site_march);
+    report.neg_grad           = summarize(3, report.site_neg_grad);
+
+    std::vector<float> angles(n, 0.0f);
+    double ang_sum = 0.0;
+    for (size_t i = 0; i < n; ++i) {
+        const double c = std::clamp(double(dot(report.site_ellipsoid[i], report.site_march[i])), -1.0, 1.0);
+        const float deg = float(std::acos(c) * (180.0 / k_pi));
+        angles[i] = deg;
+        ang_sum += double(deg);
+    }
+    report.ellipsoid_vs_march_angle_deg_p50     = percentile(angles, 0.50);
+    report.ellipsoid_vs_march_angle_deg_p50_se  = float(detail::se_quantile(angles, 0.50));
+    report.ellipsoid_vs_march_angle_deg_p90     = percentile(angles, 0.90);
+    report.ellipsoid_vs_march_angle_deg_p90_se  = float(detail::se_quantile(angles, 0.90));
+    report.ellipsoid_vs_march_angle_deg_mean    = float(ang_sum / double(n));
+    report.ellipsoid_vs_march_angle_deg_mean_se = float(detail::se_mean(angles));
+
+    const bool angle_ok = report.ellipsoid_vs_march_angle_deg_p50 < k_normals_ellipsoid_angle_deg;
+    const bool hollow_ok =
+        std::abs(report.ellipsoid.hollow_shell_share - report.march_lowpass_0_6m.hollow_shell_share) <= k_normals_ellipsoid_pp &&
+        std::abs(report.ellipsoid.inner_half_hollow_shell_share - report.march_lowpass_0_6m.inner_half_hollow_shell_share) <= k_normals_ellipsoid_pp;
+    const bool skirt_ok =
+        std::abs(report.ellipsoid.below_horizontal_share - report.march_lowpass_0_6m.below_horizontal_share) <= k_normals_ellipsoid_pp;
+    report.decision = (angle_ok && hollow_ok && skirt_ok) ? "ellipsoid" : "march_lowpass_0_6m";
+    return report;
+}
+
 // ---- The report ----------------------------------------------------------------
 
 namespace {
@@ -973,10 +1211,14 @@ std::string probe_report_json(const Probe& probe, const ProbeOptions& opt, const
     j.key("lowest_leaf_height_m"); if (leafy && m.bark_triangles) j.num(llo.z - bark_zmin); else j.null();
     j.end();
 
-    // Per-direction site lighting, shared by both modes.
+    // Per-direction site lighting, shared by oracle and sunlit modes.
     std::vector<SiteLight> light;
     if (opt.oracle || opt.sunlit)
         for (const SunDirection& s : suns) light.push_back(light_sites(probe, s.dir));
+
+    std::optional<CrownVolume> shared_volume;
+    ExtinctionModel normals_model;
+    bool have_decided_model = false;
 
     j.key("modes").obj();
     if (opt.oracle) {
@@ -986,8 +1228,8 @@ std::string probe_report_json(const Probe& probe, const ProbeOptions& opt, const
         j.key("trunk_axis").str("object z axis through the origin");
         j.key("occluders").str(occluders_name(Occluders::leaves_and_bark));
         std::vector<FormatElevation> fmt;
-        std::optional<CrownVolume> volume;
-        if (leafy) volume = CrownVolume::build(probe, k_format_cells);
+        if (leafy) shared_volume = CrownVolume::build(probe, k_format_cells);
+        std::optional<CrownVolume>& volume = shared_volume;
         std::vector<std::pair<float, bool>> opaque_by_direction;
 
         j.key("directions").arr();
@@ -1108,6 +1350,14 @@ std::string probe_report_json(const Probe& probe, const ProbeOptions& opt, const
         j.key("format");
         if (volume) {
             const FormatDecision d = decide_format(fmt);
+            if (d.decision != "undecidable") {
+                if (d.decision == "scalar") {
+                    normals_model = ExtinctionModel{ExtinctionKind::scalar, d.g, 1.0f};
+                } else {
+                    normals_model = ExtinctionModel{ExtinctionKind::tensor, 0.5f, d.clumping};
+                }
+                have_decided_model = true;
+            }
             j.obj();
             j.key("cells_longest_axis").integer(k_format_cells);
             j.key("rays_per_footprint").integer(k_format_rays_per_side * k_format_rays_per_side);
@@ -1213,6 +1463,63 @@ std::string probe_report_json(const Probe& probe, const ProbeOptions& opt, const
             j.end();
         }
         j.end();
+        j.end();
+    }
+
+    if (opt.normals) {
+        auto write_normal_source = [&](const NormalSourceStats& st) {
+            j.obj();
+            j.key("against_outward_share").num(st.against_outward_share);
+            j.key("against_outward_share_se").num(st.against_outward_share_se);
+            j.key("inner_half_against_outward_share").num(st.inner_half_against_outward_share);
+            j.key("inner_half_against_outward_share_se").num(st.inner_half_against_outward_share_se);
+            j.key("neighbour_agreement").num(st.neighbour_agreement);
+            j.key("neighbour_agreement_se").num(st.neighbour_agreement_se);
+            j.key("hollow_shell_share").num(st.hollow_shell_share);
+            j.key("hollow_shell_share_se").num(st.hollow_shell_share_se);
+            j.key("inner_half_hollow_shell_share").num(st.inner_half_hollow_shell_share);
+            j.key("inner_half_hollow_shell_share_se").num(st.inner_half_hollow_shell_share_se);
+            j.key("below_horizontal_share").num(st.below_horizontal_share);
+            j.key("below_horizontal_share_se").num(st.below_horizontal_share_se);
+            j.end();
+        };
+        j.key("normals").obj();
+        j.key("sites").integer(static_cast<long long>(m.sites.size()));
+        j.key("lowpass_sigma_m").num(k_normals_lowpass_sigma_m);
+        j.key("directions").integer(k_normals_directions);
+        j.key("neighbours").integer(k_normals_neighbours);
+        if (leafy && !m.sites.empty()) {
+            if (!shared_volume) shared_volume = CrownVolume::build(probe, k_format_cells);
+            const ExtinctionModel model = have_decided_model ? normals_model : shared_volume->model();
+            const NormalsReport nr = measure_normals(probe, *shared_volume, model, k_normals_lowpass_sigma_m);
+            j.key("inner_half_sites").integer(nr.inner_half_sites);
+            j.key("extinction_kind").str(nr.model.kind == ExtinctionKind::scalar ? "scalar" : "tensor");
+            j.key("extinction_g").num(nr.model.g);
+            j.key("extinction_clumping").num(nr.model.clumping);
+            j.key("sources").obj();
+            j.key("card");               write_normal_source(nr.card);
+            j.key("ellipsoid");          write_normal_source(nr.ellipsoid);
+            j.key("march_lowpass_0_6m"); write_normal_source(nr.march_lowpass_0_6m);
+            j.key("neg_grad");           write_normal_source(nr.neg_grad);
+            j.end();
+            j.key("ellipsoid_vs_march_angle_deg").obj();
+            j.key("p50").num(nr.ellipsoid_vs_march_angle_deg_p50);
+            j.key("p50_se").num(nr.ellipsoid_vs_march_angle_deg_p50_se);
+            j.key("p90").num(nr.ellipsoid_vs_march_angle_deg_p90);
+            j.key("p90_se").num(nr.ellipsoid_vs_march_angle_deg_p90_se);
+            j.key("mean").num(nr.ellipsoid_vs_march_angle_deg_mean);
+            j.key("mean_se").num(nr.ellipsoid_vs_march_angle_deg_mean_se);
+            j.end();
+            j.key("decision").str(nr.decision);
+        } else {
+            j.key("inner_half_sites").integer(0);
+            j.key("extinction_kind").null();
+            j.key("extinction_g").null();
+            j.key("extinction_clumping").null();
+            j.key("sources").null();
+            j.key("ellipsoid_vs_march_angle_deg").null();
+            j.key("decision").null();
+        }
         j.end();
     }
     j.end();   // modes

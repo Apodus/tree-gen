@@ -112,7 +112,7 @@ void print_help() {
         "  --ledger=<path>               Write the geometry ledger JSON (tree scenarios; needs --out).\n"
         "  --probe-crown=<path>          Crown probe report JSON (schema 1) of the tree or of --glb.\n"
         "  --glb=<file>                  Probe a GLB written by treegen instead of generating one.\n"
-        "  --modes=oracle,sunlit         Probe modes (default: all).\n"
+        "  --modes=oracle,sunlit,normals Probe modes (default: all).\n"
         "  --sun-elevations=<deg,...>    Default 10,20,30,45,60,70,75,90.\n"
         "  --sun-azimuths=<count>        Azimuths about the vertical axis, from 0 (default 4).\n"
         "  --eyes=<x,y,z;...>            Eye points (object space) for the sunlit share among visible sites.\n"
@@ -218,14 +218,15 @@ bool parse_probe_options(const std::string& modes, const std::string& elevations
                          const std::string& eyes, const std::string& lod, treegen::crown::ProbeOptions& o,
                          int& lod_index, std::string& err) {
     if (!modes.empty()) {
-        o.oracle = o.sunlit = false;
+        o.oracle = o.sunlit = o.normals = false;
         size_t pos = 0;
         while (pos <= modes.size()) {
             const size_t end = std::min(modes.find(',', pos), modes.size());
             const std::string m = modes.substr(pos, end - pos);
             if (m == "oracle") o.oracle = true;
             else if (m == "sunlit") o.sunlit = true;
-            else { err = "--modes: unknown mode '" + m + "' (this build has: oracle, sunlit)"; return false; }
+            else if (m == "normals") o.normals = true;
+            else { err = "--modes: unknown mode '" + m + "' (this build has: oracle, sunlit, normals)"; return false; }
             pos = end + 1;
         }
     }

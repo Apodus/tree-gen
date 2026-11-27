@@ -53,6 +53,11 @@ inline constexpr uint64_t k_footprint_ray_stream     = 0xC20A5EEDull;
 inline constexpr uint64_t k_footprint_alt_ray_stream = 0xA175EED1ull;
 inline constexpr uint64_t k_format_ray_stream        = 0xF0E3A7EDull;
 inline constexpr int   k_open_sky_directions = 64;
+inline constexpr float k_normals_lowpass_sigma_m     = 0.6f;   // crown-lighting §5.3, §5.5 (K8)
+inline constexpr int   k_normals_directions          = 64;     // full-sphere Fibonacci directions
+inline constexpr int   k_normals_neighbours          = 8;      // nearest-site agreement window
+inline constexpr float k_normals_ellipsoid_angle_deg = 15.0f;  // §5.3 ellipsoid-vs-march median angle cut
+inline constexpr float k_normals_ellipsoid_pp        = 0.02f;  // §5.3 failure-mode gap cut (2 pp)
 
 struct SunDirection {
     float elevation_deg = 0.0f;
@@ -242,11 +247,62 @@ double dt_scalar(const FormatFootprint& f, double g);
 double dt_axis(const FormatFootprint& f, double c);
 }  // namespace detail
 
+// --- Normals mode (crown-lighting L-P0a, §5.3, §5.5, K17) --------------------
+
+struct NormalSourceStats {
+    float against_outward_share                 = 0.0f;
+    float against_outward_share_se              = 0.0f;
+    float inner_half_against_outward_share      = 0.0f;
+    float inner_half_against_outward_share_se   = 0.0f;
+    float neighbour_agreement                   = 0.0f;
+    float neighbour_agreement_se                = 0.0f;
+    float hollow_shell_share                    = 0.0f;
+    float hollow_shell_share_se                 = 0.0f;
+    float inner_half_hollow_shell_share         = 0.0f;
+    float inner_half_hollow_shell_share_se      = 0.0f;
+    float below_horizontal_share                = 0.0f;
+    float below_horizontal_share_se             = 0.0f;
+};
+
+struct NormalsReport {
+    int               sites            = 0;
+    int               inner_half_sites = 0;
+    float             lowpass_sigma_m  = k_normals_lowpass_sigma_m;
+    int               directions       = k_normals_directions;
+    int               neighbours       = k_normals_neighbours;
+    ExtinctionModel   model;
+    NormalSourceStats card;
+    NormalSourceStats ellipsoid;
+    NormalSourceStats march_lowpass_0_6m;
+    NormalSourceStats neg_grad;
+    float             ellipsoid_vs_march_angle_deg_p50     = 0.0f;
+    float             ellipsoid_vs_march_angle_deg_p50_se  = 0.0f;
+    float             ellipsoid_vs_march_angle_deg_p90     = 0.0f;
+    float             ellipsoid_vs_march_angle_deg_p90_se  = 0.0f;
+    float             ellipsoid_vs_march_angle_deg_mean    = 0.0f;
+    float             ellipsoid_vs_march_angle_deg_mean_se = 0.0f;
+    std::string       decision;   // ellipsoid | march_lowpass_0_6m
+
+    // Per-site unit directions (in Probe::mesh().sites order) for direct unit-test checks.
+    std::vector<vec3>    site_card;
+    std::vector<vec3>    site_ellipsoid;
+    std::vector<vec3>    site_march;
+    std::vector<vec3>    site_neg_grad;
+    std::vector<uint8_t> site_inner_half;
+};
+
+// Measures the four candidate leaf-normal sources of crown-lighting §5.3
+// (card, per-tree ellipsoid, 0.6 m low-passed march, and -grad of density(p))
+// over all mesh-derived leaf sites of `probe` using `volume` and `model`.
+NormalsReport measure_normals(const Probe& probe, const CrownVolume& volume, const ExtinctionModel& model,
+                              float lowpass_sigma_m = k_normals_lowpass_sigma_m);
+
 // --- The report ----------------------------------------------------------------
 
 struct ProbeOptions {
-    bool               oracle = true;
-    bool               sunlit = true;
+    bool               oracle  = true;
+    bool               sunlit  = true;
+    bool               normals = true;
     std::vector<float> elevations_deg = {10, 20, 30, 45, 60, 70, 75, 90};
     int                azimuths = 4;
     std::vector<vec3>  eyes;   // object space

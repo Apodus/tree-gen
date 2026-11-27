@@ -18,6 +18,7 @@
 #include "../json_reader.hpp"
 #include "../png_encoder.hpp"
 #include "../scenario.hpp"
+#include "../species_registry.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -481,6 +482,7 @@ TEST_CASE("[crown_oracle] format rule: bark is outside its population; everythin
     o.elevations_deg = {30.0f, 45.0f, 60.0f, 90.0f};
     o.azimuths = 1;
     o.sunlit = false;
+    o.normals = false;
     const std::string da = cr::probe_report_json(a, o, "{}"), db = cr::probe_report_json(b, o, "{}");
     const size_t fa = da.find("\"format\": {"), fb = db.find("\"format\": {");
     REQUIRE(fa != std::string::npos);
@@ -1049,6 +1051,7 @@ TEST_CASE("[crown_oracle] scenario path and --glb of the written file agree", "[
         const std::string da = slurp(a), db = slurp(b);
         REQUIRE(da.find("\"sunlit\": {") != std::string::npos);
         REQUIRE(da.find("\"oracle\": {") != std::string::npos);
+        REQUIRE(da.find("\"normals\": {") != std::string::npos);
         CHECK(da.find("\"source\": \"scenario\"") != std::string::npos);
         CHECK(db.find("\"source\": \"glb\"") != std::string::npos);
         CHECK(strip_input(da) == strip_input(db));
@@ -1156,6 +1159,44 @@ const std::set<std::string> k_schema_1 = {
     "modes.sunlit.open_sky.mean_se", "modes.sunlit.open_sky.p10_se", "modes.sunlit.open_sky.p50_se",
     "modes.sunlit.open_sky.p90_se", "modes.sunlit.directions[].share_se", "modes.sunlit.directions[].quartiles_se",
     "modes.sunlit.directions[].deciles_se", "modes.sunlit.directions[].eyes[].share_se",
+    // Crown-lighting L-P0a Part A: normals mode fields (schema 1 additive extension, K17).
+    "modes.normals", "modes.normals.sites", "modes.normals.inner_half_sites",
+    "modes.normals.lowpass_sigma_m", "modes.normals.directions", "modes.normals.neighbours",
+    "modes.normals.extinction_kind", "modes.normals.extinction_g", "modes.normals.extinction_clumping",
+    "modes.normals.sources",
+    "modes.normals.sources.card",
+    "modes.normals.sources.card.against_outward_share", "modes.normals.sources.card.against_outward_share_se",
+    "modes.normals.sources.card.inner_half_against_outward_share", "modes.normals.sources.card.inner_half_against_outward_share_se",
+    "modes.normals.sources.card.neighbour_agreement", "modes.normals.sources.card.neighbour_agreement_se",
+    "modes.normals.sources.card.hollow_shell_share", "modes.normals.sources.card.hollow_shell_share_se",
+    "modes.normals.sources.card.inner_half_hollow_shell_share", "modes.normals.sources.card.inner_half_hollow_shell_share_se",
+    "modes.normals.sources.card.below_horizontal_share", "modes.normals.sources.card.below_horizontal_share_se",
+    "modes.normals.sources.ellipsoid",
+    "modes.normals.sources.ellipsoid.against_outward_share", "modes.normals.sources.ellipsoid.against_outward_share_se",
+    "modes.normals.sources.ellipsoid.inner_half_against_outward_share", "modes.normals.sources.ellipsoid.inner_half_against_outward_share_se",
+    "modes.normals.sources.ellipsoid.neighbour_agreement", "modes.normals.sources.ellipsoid.neighbour_agreement_se",
+    "modes.normals.sources.ellipsoid.hollow_shell_share", "modes.normals.sources.ellipsoid.hollow_shell_share_se",
+    "modes.normals.sources.ellipsoid.inner_half_hollow_shell_share", "modes.normals.sources.ellipsoid.inner_half_hollow_shell_share_se",
+    "modes.normals.sources.ellipsoid.below_horizontal_share", "modes.normals.sources.ellipsoid.below_horizontal_share_se",
+    "modes.normals.sources.march_lowpass_0_6m",
+    "modes.normals.sources.march_lowpass_0_6m.against_outward_share", "modes.normals.sources.march_lowpass_0_6m.against_outward_share_se",
+    "modes.normals.sources.march_lowpass_0_6m.inner_half_against_outward_share", "modes.normals.sources.march_lowpass_0_6m.inner_half_against_outward_share_se",
+    "modes.normals.sources.march_lowpass_0_6m.neighbour_agreement", "modes.normals.sources.march_lowpass_0_6m.neighbour_agreement_se",
+    "modes.normals.sources.march_lowpass_0_6m.hollow_shell_share", "modes.normals.sources.march_lowpass_0_6m.hollow_shell_share_se",
+    "modes.normals.sources.march_lowpass_0_6m.inner_half_hollow_shell_share", "modes.normals.sources.march_lowpass_0_6m.inner_half_hollow_shell_share_se",
+    "modes.normals.sources.march_lowpass_0_6m.below_horizontal_share", "modes.normals.sources.march_lowpass_0_6m.below_horizontal_share_se",
+    "modes.normals.sources.neg_grad",
+    "modes.normals.sources.neg_grad.against_outward_share", "modes.normals.sources.neg_grad.against_outward_share_se",
+    "modes.normals.sources.neg_grad.inner_half_against_outward_share", "modes.normals.sources.neg_grad.inner_half_against_outward_share_se",
+    "modes.normals.sources.neg_grad.neighbour_agreement", "modes.normals.sources.neg_grad.neighbour_agreement_se",
+    "modes.normals.sources.neg_grad.hollow_shell_share", "modes.normals.sources.neg_grad.hollow_shell_share_se",
+    "modes.normals.sources.neg_grad.inner_half_hollow_shell_share", "modes.normals.sources.neg_grad.inner_half_hollow_shell_share_se",
+    "modes.normals.sources.neg_grad.below_horizontal_share", "modes.normals.sources.neg_grad.below_horizontal_share_se",
+    "modes.normals.ellipsoid_vs_march_angle_deg",
+    "modes.normals.ellipsoid_vs_march_angle_deg.p50", "modes.normals.ellipsoid_vs_march_angle_deg.p50_se",
+    "modes.normals.ellipsoid_vs_march_angle_deg.p90", "modes.normals.ellipsoid_vs_march_angle_deg.p90_se",
+    "modes.normals.ellipsoid_vs_march_angle_deg.mean", "modes.normals.ellipsoid_vs_march_angle_deg.mean_se",
+    "modes.normals.decision",
 };
 
 // The input object's source-specific fields.
@@ -1375,8 +1416,8 @@ TEST_CASE("[crown_oracle] G-P4 re-jitter stability across pinned elevations on f
     // Zenith ground-projected area & LAI via ProbeOptions::selection_stream plumbing.
     {
         cr::ProbeOptions oa, ob;
-        oa.oracle = false; oa.sunlit = false; oa.selection_stream = cr::RayStream::selection;
-        ob.oracle = false; ob.sunlit = false; ob.selection_stream = cr::RayStream::selection_alt;
+        oa.oracle = false; oa.sunlit = false; oa.normals = false; oa.selection_stream = cr::RayStream::selection;
+        ob.oracle = false; ob.sunlit = false; ob.normals = false; ob.selection_stream = cr::RayStream::selection_alt;
         const auto pa = treegen::json::parse(cr::probe_report_json(probe, oa, "{}"));
         const auto pb = treegen::json::parse(cr::probe_report_json(probe, ob, "{}"));
         REQUIRE(pa.ok);
@@ -1732,6 +1773,7 @@ TEST_CASE("[crown_oracle] G-D4 emit_levels rejects mismatched scenario_fnv and p
         cr::ProbeOptions o;
         o.oracle = false;
         o.sunlit = false;
+        o.normals = false;
         const std::string doc = cr::probe_glb_report(g.glb, 1, o, cr::ProbeInput::glb("oak_lod1.glb"));
         CHECK(doc.find("\"probe_lod\": 1") != std::string::npos);
         CHECK(doc.find("\"glb_fnv1a64\": \"" + expected_digest(g.glb) + "\"") != std::string::npos);
@@ -2140,4 +2182,252 @@ TEST_CASE("[crown_volume_invariants] trace conservation, PSD/NaN-free, K8 lowpas
         CHECK(std::memcmp(glb.bin_begin + off0, cv.tex0.data(), len0) == 0);
         CHECK(std::memcmp(glb.bin_begin + off1, cv.tex1.data(), len1) == 0);
     }
+}
+
+// ---- Crown Lighting L-P0a Part A Gates ([crown_oracle], [crown_normal_source], [crown_probe_species]) ----
+
+TEST_CASE("[crown_oracle] L-P0a N-layer alpha-textured horizontal cards: bottom sunlit share equals product of open fractions",
+          "[treegen][crown_oracle]") {
+    // 3 independent alpha-textured horizontal occluder layers at z = 2, 4, 6 over
+    // [0, 16]^2 above a 16 x 16 bottom layer of bent cards at z = 0 (256 receiver
+    // sites whose own ridges sit at z = +0.02 m directly on the zenith ray, so
+    // counting a site's own card as an occluder collapses bottom sunlit share to 0).
+    // A 32 x 32 atlas holds 4 disjoint 16 x 16 cells:
+    //   cell (0,0): bottom cards (opaque)
+    //   cell (1,0): layer 1 — columns x in [0, 7] opaque -> open p1 = 8/16 = 0.500
+    //   cell (0,1): layer 2 — rows    y in [0, 5] opaque -> open p2 = 10/16 = 0.625
+    //   cell (1,1): layer 3 — columns (x % 4) == 0 opaque -> open p3 = 12/16 = 0.750
+    // Among layer 1's 8 open columns (8..15), layer 3 leaves 6 open (9,10,11,13,14,15),
+    // and layer 2 acts orthogonally on y, so the exact product p1 * p2 * p3 = 60/256
+    // holds without Monte Carlo noise.
+    constexpr double p1 = 8.0 / 16.0;
+    constexpr double p2 = 10.0 / 16.0;
+    constexpr double p3 = 12.0 / 16.0;
+    for (double pk : {p1, p2, p3}) {
+        REQUIRE(pk >= 0.2);
+        REQUIRE(pk <= 0.8);
+    }
+    const double expected_bottom = p1 * p2 * p3;
+    REQUIRE(expected_bottom >= 0.2);
+    REQUIRE(expected_bottom <= 0.8);
+
+    Prim p;
+    auto add_uv_card = [&](vec3 c, float side, float u0, float v0, float u1, float v1) {
+        const float h = 0.5f * side;
+        const uint32_t vtx0 = p.vert(vec3{c.x - h, c.y - h, c.z}, u0, v0);
+        const uint32_t vtx1 = p.vert(vec3{c.x + h, c.y - h, c.z}, u1, v0);
+        const uint32_t vtx2 = p.vert(vec3{c.x + h, c.y + h, c.z}, u1, v1);
+        const uint32_t vtx3 = p.vert(vec3{c.x - h, c.y + h, c.z}, u0, v1);
+        p.idx.insert(p.idx.end(), {vtx0, vtx1, vtx2, vtx0, vtx2, vtx3});
+    };
+
+    // Upper 3 alpha-textured horizontal layers spanning [0, 16]^2.
+    add_uv_card(vec3{8.0f, 8.0f, 2.0f}, 16.0f, 0.5f, 0.0f, 1.0f, 0.5f);  // cell (1,0): p1 = 0.500
+    add_uv_card(vec3{8.0f, 8.0f, 4.0f}, 16.0f, 0.0f, 0.5f, 0.5f, 1.0f);  // cell (0,1): p2 = 0.625
+    add_uv_card(vec3{8.0f, 8.0f, 6.0f}, 16.0f, 0.5f, 0.5f, 1.0f, 1.0f);  // cell (1,1): p3 = 0.750
+
+    // Bottom layer: 16 x 16 bent cards centred on texel centres (i + 0.5, j + 0.5, 0.0),
+    // mapped into opaque cell (0,0) (UV in [0, 0.5]^2).
+    for (int j = 0; j < 16; ++j)
+        for (int i = 0; i < 16; ++i) {
+            const float cx = float(i) + 0.5f, cy = float(j) + 0.5f;
+            const float h = 0.35f;
+            uint32_t v[6];
+            for (int r = 0; r < 2; ++r)
+                for (int k = 0; k < 3; ++k)
+                    v[r * 3 + k] = p.vert(
+                        vec3{cx + h * float(k - 1), cy + h * float(2 * r - 1), k == 1 ? 0.02f : -0.01f},
+                        0.25f * float(k), 0.5f * float(r));
+            p.idx.insert(p.idx.end(), {v[0], v[1], v[4], v[0], v[4], v[3], v[1], v[2], v[5], v[1], v[5], v[4]});
+        }
+
+    cr::CrownMesh m;
+    m.add_leaves(p.pos, p.uv, p.idx);
+    m.atlas.width = 32;
+    m.atlas.height = 32;
+    m.atlas.cutoff = 0.5f;
+    m.atlas.alpha.assign(32 * 32, 255u);
+    auto set_px = [&](int x, int y, uint8_t a) { m.atlas.alpha[size_t(y) * 32u + size_t(x)] = a; };
+    for (int y = 0; y < 16; ++y)
+        for (int x = 0; x < 16; ++x) {
+            set_px(16 + x, y,      x < 8 ? 255u : 0u);          // layer 1: p1 = 8/16
+            set_px(x,      16 + y, y < 6 ? 255u : 0u);          // layer 2: p2 = 10/16
+            set_px(16 + x, 16 + y, (x % 4) == 0 ? 255u : 0u);   // layer 3: p3 = 12/16
+        }
+    REQUIRE(m.sites.size() == 3u + 256u);
+    const cr::Probe probe(std::move(m));
+
+    // Verify through probe_report_json (sunlit_by_depth bottom bin at depth = 6.0 m).
+    cr::ProbeOptions o;
+    o.oracle = true;
+    o.sunlit = true;
+    o.normals = false;
+    o.elevations_deg = {90.0f};
+    o.azimuths = 1;
+    const auto parsed = treegen::json::parse(cr::probe_report_json(probe, o, "{}"));
+    REQUIRE(parsed.ok);
+    const auto& od0 = parsed.root.find("modes")->find("oracle")->find("directions")->a.at(0);
+    const auto& bins = od0.find("sunlit_by_depth")->a;
+    const treegen::json::value* bottom_bin = nullptr;
+    for (const auto& b : bins)
+        if (b.find("sites")->n == 256.0) { bottom_bin = &b; break; }
+    REQUIRE(bottom_bin != nullptr);
+    const double bottom_share = bottom_bin->find("sunlit_share")->n;
+    INFO("bottom_share=" << bottom_share << " expected=" << expected_bottom);
+    CHECK(bottom_share == Approx(expected_bottom).margin(1e-6));
+
+    // Also verify the whole-crown sunlit share agrees with the exact construction
+    // (layer 3 top = lit, layer 2 mid = 0.75 lit on its centroid at (8,8), layer 1 = ...).
+    int direct_bottom_lit = 0, direct_bottom_self_hit = 0;
+    for (size_t i = 3; i < probe.mesh().sites.size(); ++i) {
+        const auto& st = probe.mesh().sites[i];
+        if (!probe.occluded(st.centroid, vec3{0, 0, 1}, st.id, kAll)) ++direct_bottom_lit;
+        if (!probe.occluded(st.centroid, vec3{0, 0, 1}, -1, kAll))    ++direct_bottom_self_hit;
+    }
+    CHECK(double(direct_bottom_lit) / 256.0 == Approx(expected_bottom).margin(1e-6));
+    // Positive control for the own-site mutation: without skip_site every bent card blocks itself.
+    CHECK(direct_bottom_self_hit == 0);
+}
+
+TEST_CASE("[crown_normal_source] solid ball outward within 20 deg at shell and hollow shell -grad vs march",
+          "[treegen][crown_normal_source]") {
+    auto build_spherical_cloud = [](uint64_t seed, int count, float r_min, float r_max, float side) {
+        treegen::pcg32 rng;
+        rng.seed(seed, 0xC20B411ull);
+        Prim p;
+        const vec3 centre{0.0f, 0.0f, 4.0f};
+        const float r3_min = r_min * r_min * r_min;
+        const float r3_max = r_max * r_max * r_max;
+        for (int i = 0; i < count; ++i) {
+            const float u = rng.next_float_01();
+            const float r = std::cbrt(r3_min + u * (r3_max - r3_min));
+            const vec3 dir = unit_from(2.0f * rng.next_float_01() - 1.0f, float(2.0 * k_pi) * rng.next_float_01());
+            const vec3 c = centre + dir * r;
+            const vec3 n = unit_from(2.0f * rng.next_float_01() - 1.0f, float(2.0 * k_pi) * rng.next_float_01());
+            vec3 a, b;
+            basis(n, a, b);
+            const float rot = float(2.0 * k_pi) * rng.next_float_01();
+            const vec3 ra = a * std::cos(rot) + b * std::sin(rot);
+            p.card(c, ra, treegen::cross(n, ra), side);
+        }
+        cr::CrownMesh m;
+        m.add_leaves(p.pos, p.uv, p.idx);
+        return cr::Probe(std::move(m));
+    };
+
+    const cr::ExtinctionModel model{cr::ExtinctionKind::tensor, 0.5f, 1.0f};
+    const vec3 centre{0.0f, 0.0f, 4.0f};
+
+    SECTION("synthetic solid ball: low-passed march points outward within 20 deg at the shell") {
+        constexpr float R = 3.0f;
+        const cr::Probe probe = build_spherical_cloud(101, 500, 0.0f, R, 0.45f);
+        REQUIRE(probe.mesh().sites.size() >= 200u);
+        const cr::CrownVolume vol = cr::CrownVolume::build(probe, cr::k_format_cells);
+        const cr::NormalsReport nr = cr::measure_normals(probe, vol, model);
+        REQUIRE(nr.sites >= 200);
+
+        int shell_sites = 0;
+        float max_angle_deg = 0.0f;
+        double sum_angle_deg = 0.0;
+        for (size_t i = 0; i < probe.mesh().sites.size(); ++i) {
+            const vec3 off = probe.mesh().sites[i].centroid - centre;
+            const float r = treegen::length(off);
+            if (r < 0.75f * R) continue;
+            ++shell_sites;
+            const vec3 outward = off / r;
+            const double c = std::clamp(double(treegen::dot(nr.site_march[i], outward)), -1.0, 1.0);
+            const float deg = float(std::acos(c) * (180.0 / k_pi));
+            max_angle_deg = std::max(max_angle_deg, deg);
+            sum_angle_deg += deg;
+        }
+        REQUIRE(shell_sites >= 100);
+        const double mean_angle_deg = sum_angle_deg / double(shell_sites);
+        INFO("solid ball shell_sites=" << shell_sites << " mean_angle=" << mean_angle_deg << " max_angle=" << max_angle_deg);
+        CHECK(max_angle_deg <= 20.0f);
+        CHECK(mean_angle_deg <= 10.0);
+        CHECK(nr.march_lowpass_0_6m.hollow_shell_share < 0.10f);
+    }
+
+    SECTION("synthetic hollow shell: -grad > 25% inner-half occluded vs march < 10%") {
+        const cr::Probe probe = build_spherical_cloud(202, 500, 2.0f, 3.6f, 0.45f);
+        REQUIRE(probe.mesh().sites.size() >= 200u);
+        const cr::CrownVolume vol = cr::CrownVolume::build(probe, cr::k_format_cells);
+        const cr::NormalsReport nr = cr::measure_normals(probe, vol, model);
+        REQUIRE(nr.sites >= 200);
+        REQUIRE(nr.inner_half_sites >= 100);
+
+        INFO("hollow shell inner_half_hollow: neg_grad=" << nr.neg_grad.inner_half_hollow_shell_share
+             << " march=" << nr.march_lowpass_0_6m.inner_half_hollow_shell_share
+             << " all_hollow: neg_grad=" << nr.neg_grad.hollow_shell_share
+             << " march=" << nr.march_lowpass_0_6m.hollow_shell_share);
+        CHECK(nr.neg_grad.inner_half_hollow_shell_share > 0.25f);
+        CHECK(nr.march_lowpass_0_6m.inner_half_hollow_shell_share < 0.10f);
+        CHECK(nr.march_lowpass_0_6m.hollow_shell_share < 0.10f);
+
+        // Verify JSON output carries identical numbers to measure_normals.
+        cr::ProbeOptions o;
+        o.oracle = false;
+        o.sunlit = false;
+        o.normals = true;
+        const auto parsed = treegen::json::parse(cr::probe_report_json(probe, o, "{}"));
+        REQUIRE(parsed.ok);
+        const auto& jn = *parsed.root.find("modes")->find("normals");
+        CHECK(jn.find("sites")->n == double(nr.sites));
+        const auto& js = *jn.find("sources");
+        CHECK(js.find("neg_grad")->find("inner_half_hollow_shell_share")->n
+              == Approx(double(nr.neg_grad.inner_half_hollow_shell_share)).margin(1e-6));
+        CHECK(js.find("march_lowpass_0_6m")->find("inner_half_hollow_shell_share")->n
+              == Approx(double(nr.march_lowpass_0_6m.inner_half_hollow_shell_share)).margin(1e-6));
+    }
+}
+
+TEST_CASE("[crown_probe_species] every registry species at seed 42 returns sunlit and normals with > 100 sites",
+          "[treegen][crown_probe_species]") {
+    const std::vector<std::string> species = treegen::get_species_names();
+    REQUIRE(species.size() >= 4u);
+
+    size_t probed = 0;
+    for (const std::string& name : species) {
+        INFO("species=" << name);
+        const treegen::GeneratedTree& g = rynx::test_support::generated_tree(name, 42);
+        cr::ProbeOptions o;
+        o.oracle = false;
+        o.sunlit = true;
+        o.normals = true;
+        o.elevations_deg = {45.0f};
+        o.azimuths = 1;
+        const std::string doc = cr::probe_glb_report(
+            g.glb, 0, o, cr::ProbeInput::scenario("c3_" + name + ".json", 42));
+        const auto parsed = treegen::json::parse(doc);
+        REQUIRE(parsed.ok);
+
+        const auto* modes = parsed.root.find("modes");
+        REQUIRE(modes != nullptr);
+        const auto* sunlit = modes->find("sunlit");
+        const auto* normals = modes->find("normals");
+        REQUIRE(sunlit != nullptr);
+        REQUIRE(normals != nullptr);
+        CHECK(modes->find("oracle") == nullptr);
+
+        const double sunlit_sites = sunlit->find("sites")->n;
+        const double normals_sites = normals->find("sites")->n;
+        CHECK(sunlit_sites > 100.0);
+        CHECK(normals_sites > 100.0);
+        CHECK(sunlit_sites == normals_sites);
+        REQUIRE(sunlit->find("directions")->a.size() == 1u);
+
+        const auto* sources = normals->find("sources");
+        REQUIRE(sources != nullptr);
+        for (const char* src : {"card", "ellipsoid", "march_lowpass_0_6m", "neg_grad"}) {
+            const auto* s = sources->find(src);
+            REQUIRE(s != nullptr);
+            CHECK(std::isfinite(s->find("neighbour_agreement")->n));
+            CHECK(std::isfinite(s->find("hollow_shell_share")->n));
+            CHECK(std::isfinite(s->find("below_horizontal_share")->n));
+        }
+        const std::string dec = normals->find("decision")->s;
+        CHECK((dec == "ellipsoid" || dec == "march_lowpass_0_6m"));
+        ++probed;
+    }
+    CHECK(probed == species.size());
 }

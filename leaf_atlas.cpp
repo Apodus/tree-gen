@@ -1056,14 +1056,16 @@ namespace treegen {
                     const float lb = col.b * tip_luma * cyl_ao;
 
                     // Woody fascicle sheath at very base (t < 0.12): darker & lower trans (>= 0.08).
-                    float tr = trans_v * (0.85f + 0.20f * t);
+                    // J7: PineNeedle cells carry CLM5 Table 2.3.1 NET-over-BDT ratio (0.71 / 0.50 = 1.42x)
+                    // directly in the shared atlas so all 24 runtime GLBs deduplicate to one PNG.
+                    float tr = trans_v * (0.85f + 0.20f * t) * K_CLM5_NEEDLE_TRANSLUCENCY_SCALE;
                     float ro = rough_v;
                     if (t < 0.12f) {
                         const float sheath = 1.0f - t / 0.12f;
-                        tr = tr * (1.0f - sheath) + 0.09f * sheath;
+                        tr = tr * (1.0f - sheath) + (0.09f * K_CLM5_NEEDLE_TRANSLUCENCY_SCALE) * sheath;
                         ro = ro + 0.08f * sheath;
                     }
-                    tr = clampf(tr, 0.075f, 0.82f);
+                    tr = clampf(tr, 0.075f, 0.96f);
                     ro = clampf(ro, 0.64f, 0.86f);
 
                     const size_t ci = static_cast<size_t>(y) * W + x;
@@ -1375,8 +1377,25 @@ namespace treegen {
     }  // namespace
 
     LeafAtlasPngBundle encode_leaf_bundle_pngs(uint64_t /*seed*/,
-                                               const std::array<int, 2>& cluster_cell_grid) {
-        const auto cells = bake_all_atlas_cells(cluster_cell_grid);
+                                               const std::array<int, 2>& cluster_cell_grid,
+                                               LeafShape species,
+                                               float translucency_scale) {
+        auto cells = bake_all_atlas_cells(cluster_cell_grid);
+        // Apply per-scenario translucency scale override only when it deviates from
+        // the species' canonical CLM5 Table 2.3.1 scale baked into the shared atlas.
+        const float canonical = canonical_translucency_scale(species);
+        if (translucency_scale > 0.0f && std::abs(translucency_scale - canonical) > 1e-4f) {
+            const float factor = translucency_scale / canonical;
+            const int col = leaf_atlas_cell_col(species);
+            for (int row = 0; row < K_LEAF_ATLAS_DIM; ++row) {
+                CellChannels& c = cells[static_cast<size_t>(row * K_LEAF_ATLAS_DIM + col)];
+                for (size_t ci = 0; ci < CellChannels::N; ++ci) {
+                    if (c.trans[ci] == 0u) continue;
+                    const float scaled = clampf((static_cast<float>(c.trans[ci]) / 255.0f) * factor, 0.065f, 0.96f);
+                    c.trans[ci] = u8_from_01(scaled);
+                }
+            }
+        }
         LeafAtlasPngBundle out;
         out.albedo_png       = encode_atlas_channel_from_cells(cells, AtlasChannelKind::Albedo);
         out.normal_png       = encode_atlas_channel_from_cells(cells, AtlasChannelKind::Normal);

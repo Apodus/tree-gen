@@ -4,6 +4,7 @@
 
 #include "bark_texture.hpp"
 #include "branch_mesh.hpp"
+#include "crown_oracle.hpp"
 #include "crown_probe.hpp"
 #include "crown_volume.hpp"
 #include "det_rng.hpp"
@@ -17,6 +18,8 @@
 #include <stb_image.h>
 
 #include <algorithm>
+#include <cmath>
+#include <numeric>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -28,6 +31,163 @@ namespace {
 bool scenario_has_leaves(const Scenario& s, const TreeSkeleton& skel) {
     return s.tree.leaves.geometry_type == LeafGeometryType::BranchStrip
            || (!skel.leaf_sites.empty() && s.tree.leaves.leaf_density_per_meter > 0.0f);
+}
+
+// Crown-lighting L-P2 (§5.3, §6 Leaf-normal model, K14, K16):
+// Blends every leaf card's vertex normal toward a smooth crown-scale direction
+// evaluated ONCE per leaf site via 0.6 m low-passed 64-direction Fibonacci march
+// through `vol` (`march_crown_normal`). Preserves:
+//   - K14: zero reordering of primitives, vertices, or indices.
+//   - Card rigidity: all vertices of a card receive bit-identical normals.
+//   - Orthonormal TBN: vertex tangents are re-orthogonalized against the blended
+//     normal while preserving tangent.w handedness.
+void apply_crown_normals_to_lod(LodOutput& lod,
+                                const crown::CrownVolume& vol,
+                                const crown::ExtinctionModel& model,
+                                float blend) {
+    if (!lod.has_leaves || !(blend > 0.0f)) return;
+    const size_t vcount = lod.leaf_positions.size() / 3;
+    const size_t tcount = lod.leaf_indices_u32.size() / 3;
+    if (vcount == 0 || tcount == 0 || lod.leaf_normals.size() != vcount * 3) return;
+
+    // 1. Connected components (cards) over leaf triangles by shared vertex index
+    //    (identical rule to crown::derive_sites, K17).
+    std::vector<uint32_t> parent(tcount);
+    std::iota(parent.begin(), parent.end(), 0u);
+    auto find_root = [&](uint32_t x) {
+        while (parent[x] != x) { parent[x] = parent[parent[x]]; x = parent[x]; }
+        return x;
+    };
+    auto unite = [&](uint32_t a, uint32_t b) {
+        a = find_root(a); b = find_root(b);
+        if (a != b) parent[std::max(a, b)] = std::min(a, b);
+    };
+
+    std::vector<int64_t> first_tri(vcount, -1);
+    for (size_t t = 0; t < tcount; ++t) {
+        for (int k = 0; k < 3; ++k) {
+            const uint32_t v = lod.leaf_indices_u32[t * 3 + size_t(k)];
+            if (first_tri[v] < 0) first_tri[v] = int64_t(t);
+            else unite(uint32_t(first_tri[v]), uint32_t(t));
+        }
+    }
+
+    std::vector<int32_t> card_of_root(tcount, -1);
+    std::vector<std::vector<uint32_t>> card_verts;
+    std::vector<int32_t> vert_card(vcount, -1);
+    for (size_t t = 0; t < tcount; ++t) {
+        const uint32_t r = find_root(uint32_t(t));
+        if (card_of_root[r] < 0) {
+            card_of_root[r] = int32_t(card_verts.size());
+            card_verts.emplace_back();
+        }
+        const int32_t cid = card_of_root[r];
+        for (int k = 0; k < 3; ++k) {
+            const uint32_t v = lod.leaf_indices_u32[t * 3 + size_t(k)];
+            if (vert_card[v] != cid) {
+                vert_card[v] = cid;
+                card_verts[size_t(cid)].push_back(v);
+            }
+        }
+    }
+    const size_t n_cards = card_verts.size();
+    if (n_cards == 0) return;
+
+    // 2. Per-card vertex centroids + leaf AABB for ellipsoid fallback.
+    std::vector<vec3> card_centroid(n_cards);
+    vec3 llo{1e30f, 1e30f, 1e30f}, lhi{-1e30f, -1e30f, -1e30f};
+    for (size_t c = 0; c < n_cards; ++c) {
+        double sx = 0.0, sy = 0.0, sz = 0.0;
+        for (uint32_t v : card_verts[c]) {
+            const vec3 p{lod.leaf_positions[size_t(v) * 3 + 0],
+                         lod.leaf_positions[size_t(v) * 3 + 1],
+                         lod.leaf_positions[size_t(v) * 3 + 2]};
+            sx += p.x; sy += p.y; sz += p.z;
+            llo = {std::min(llo.x, p.x), std::min(llo.y, p.y), std::min(llo.z, p.z)};
+            lhi = {std::max(lhi.x, p.x), std::max(lhi.y, p.y), std::max(lhi.z, p.z)};
+        }
+        const double inv = 1.0 / double(card_verts[c].size());
+        card_centroid[c] = vec3{float(sx * inv), float(sy * inv), float(sz * inv)};
+    }
+    const vec3 centre = (llo + lhi) * 0.5f;
+    const vec3 semi{
+        std::max(0.5f * (lhi.x - llo.x), 1e-4f),
+        std::max(0.5f * (lhi.y - llo.y), 1e-4f),
+        std::max(0.5f * (lhi.z - llo.z), 1e-4f),
+    };
+
+    // 3. K17 site grouping: consecutive cards within 1 mm form one site.
+    constexpr float k_site_merge_m = 0.001f;
+    std::vector<std::pair<size_t, size_t>> site_ranges;  // [first_card, end_card)
+    for (size_t c = 0; c < n_cards; ++c) {
+        const bool join = !site_ranges.empty() &&
+            length(card_centroid[c] - card_centroid[site_ranges.back().first]) <= k_site_merge_m;
+        if (!join) site_ranges.emplace_back(c, c + 1);
+        else site_ranges.back().second = c + 1;
+    }
+
+    const size_t n_sites = site_ranges.size();
+    std::vector<vec3> site_centroid(n_sites);
+    std::vector<vec3> site_fallback(n_sites);
+    for (size_t s = 0; s < n_sites; ++s) {
+        double sx = 0.0, sy = 0.0, sz = 0.0;
+        const size_t c0 = site_ranges[s].first, c1 = site_ranges[s].second;
+        for (size_t c = c0; c < c1; ++c) {
+            sx += card_centroid[c].x; sy += card_centroid[c].y; sz += card_centroid[c].z;
+        }
+        const double inv = 1.0 / double(c1 - c0);
+        const vec3 sc{float(sx * inv), float(sy * inv), float(sz * inv)};
+        site_centroid[s] = sc;
+        const vec3 q{(sc.x - centre.x) / semi.x, (sc.y - centre.y) / semi.y, (sc.z - centre.z) / semi.z};
+        const vec3 g{q.x / semi.x, q.y / semi.y, q.z / semi.z};
+        site_fallback[s] = length(g) > 1e-8f ? normalized(g) : vec3{0.0f, 0.0f, 1.0f};
+    }
+
+    // Warm the 0.6 m low-pass cache once on the main thread, then evaluate each
+    // site's smooth crown_normal in parallel (deterministic: disjoint slots).
+    (void)vol.optical_depth(site_centroid[0], vec3{0.0f, 0.0f, 1.0f}, crown::k_normals_lowpass_sigma_m, model);
+    std::vector<vec3> site_crown_n(n_sites);
+    crown::parallel_for(n_sites, [&](size_t s) {
+        site_crown_n[s] = crown::march_crown_normal(vol, model, site_centroid[s], site_fallback[s]);
+    });
+
+    // 4. Blend each card's normal toward its site's crown_normal, write bit-identically
+    //    to all vertices of the card, and re-orthogonalize vertex tangents.
+    const bool has_tangents = (lod.leaf_tangents.size() == vcount * 4);
+    const float w_card = 1.0f - blend;
+    for (size_t s = 0; s < n_sites; ++s) {
+        const vec3 cn = site_crown_n[s];
+        for (size_t c = site_ranges[s].first; c < site_ranges[s].second; ++c) {
+            const uint32_t v0 = card_verts[c][0];
+            const vec3 card_n{lod.leaf_normals[size_t(v0) * 3 + 0],
+                              lod.leaf_normals[size_t(v0) * 3 + 1],
+                              lod.leaf_normals[size_t(v0) * 3 + 2]};
+            const vec3 raw_mix = card_n * w_card + cn * blend;
+            const vec3 blended = length(raw_mix) > 1e-6f ? normalized(raw_mix) : cn;
+
+            for (uint32_t v : card_verts[c]) {
+                lod.leaf_normals[size_t(v) * 3 + 0] = blended.x;
+                lod.leaf_normals[size_t(v) * 3 + 1] = blended.y;
+                lod.leaf_normals[size_t(v) * 3 + 2] = blended.z;
+
+                if (has_tangents) {
+                    const size_t tb = size_t(v) * 4;
+                    const vec3 t_in{lod.leaf_tangents[tb + 0], lod.leaf_tangents[tb + 1], lod.leaf_tangents[tb + 2]};
+                    vec3 t_orth = t_in - blended * dot(t_in, blended);
+                    if (length(t_orth) > 1e-6f) {
+                        t_orth = normalized(t_orth);
+                    } else {
+                        const vec3 ref = std::abs(blended.z) < 0.9f ? vec3{0.0f, 0.0f, 1.0f} : vec3{1.0f, 0.0f, 0.0f};
+                        t_orth = normalized(cross(ref, blended));
+                    }
+                    lod.leaf_tangents[tb + 0] = t_orth.x;
+                    lod.leaf_tangents[tb + 1] = t_orth.y;
+                    lod.leaf_tangents[tb + 2] = t_orth.z;
+                    // tangent.w (handedness sign) preserved unchanged.
+                }
+            }
+        }
+    }
 }
 }  // namespace
 
@@ -117,10 +277,11 @@ GeneratedTree generate_tree(const Scenario& s, uint64_t cli_seed) {
         g.images.push_back(std::move(mr));  // index 3
     }
 
-    // C6 P4 — leaf textures (when has_leaves). Single-pass bundle bake (4x faster).
+    // C6 P4 + L-P3 (J7) — leaf textures (when has_leaves). Single-pass bundle bake (4x faster).
     if (has_leaves) {
         const auto& grid = s.tree.leaves.cluster_cell_grid;
-        LeafAtlasPngBundle leaf = encode_leaf_bundle_pngs(seed_effective, grid);
+        LeafAtlasPngBundle leaf = encode_leaf_bundle_pngs(
+            seed_effective, grid, s.tree.leaves.shape, s.tree.leaves.leaf_translucency_scale);
         ImageData ld, ln, lt, lr;
         ld.png_bytes = std::move(leaf.albedo_png);
         ln.png_bytes = std::move(leaf.normal_png);
@@ -132,9 +293,62 @@ GeneratedTree generate_tree(const Scenario& s, uint64_t cli_seed) {
         g.images.push_back(std::move(lr));  // index 7
     }
 
+    // S-P1 + L-P2: build and pack F2_tensor Option 2A crown density volume from L0
+    // leaf triangles + mip-0 leaf atlas alpha coverage (geometric normals ONLY, K16),
+    // padded outward with zero voxels to enclose union(L0..L2) leaf AABBs. Then, if
+    // leaf_crown_normal_blend > 0, blend per-LOD leaf vertex normals toward the
+    // volume's 0.6 m low-passed march crown_normal BEFORE packaging GLB MeshData.
+    auto& lods = g.lods;
+    if (has_leaves && !lods.empty() && lods[0].has_leaves && g.images.size() > 4u) {
+        int w = 0, h = 0, comp = 0;
+        const auto& png = g.images[4].png_bytes;
+        unsigned char* rgba = stbi_load_from_memory(
+            reinterpret_cast<const stbi_uc*>(png.data()), static_cast<int>(png.size()), &w, &h, &comp, 4);
+        if (!rgba)
+            throw std::runtime_error(std::string("generate_tree: failed to decode leaf atlas PNG for crown volume: ")
+                                     + stbi_failure_reason());
+        crown::CrownMesh cm;
+        cm.atlas.width  = w;
+        cm.atlas.height = h;
+        cm.atlas.cutoff = 0.5f;  // matches leaf_prim.material.alpha_cutoff = 0.5f
+        cm.atlas.alpha.resize(size_t(w) * size_t(h));
+        for (size_t i = 0; i < cm.atlas.alpha.size(); ++i) cm.atlas.alpha[i] = rgba[i * 4u + 3u];
+        stbi_image_free(rgba);
+
+        cm.add_leaves(lods[0].leaf_positions, lods[0].leaf_uvs, lods[0].leaf_indices_u32);
+        const crown::Probe l0_probe(std::move(cm));
+
+        vec3 union_min{1e30f, 1e30f, 1e30f};
+        vec3 union_max{-1e30f, -1e30f, -1e30f};
+        for (const auto& lod : lods) {
+            if (!lod.has_leaves) continue;
+            for (size_t i = 0; i + 2 < lod.leaf_positions.size(); i += 3) {
+                const float x = lod.leaf_positions[i + 0];
+                const float y = lod.leaf_positions[i + 1];
+                const float z = lod.leaf_positions[i + 2];
+                union_min = {std::min(union_min.x, x), std::min(union_min.y, y), std::min(union_min.z, z)};
+                union_max = {std::max(union_max.x, x), std::max(union_max.y, y), std::max(union_max.z, z)};
+            }
+        }
+
+        const crown::CrownVolume vol = crown::CrownVolume::build_shipped(l0_probe, union_min, union_max);
+        const float clumping = (s.tree.leaves.geometry_type == LeafGeometryType::BranchStrip)
+                             ? crown::k_strip_crown_clumping
+                             : crown::k_default_crown_clumping;
+        g.crown_volume = vol.pack_option2a(clumping);
+
+        // L-P2: blend leaf shading normals toward 0.6 m low-passed march crown_normal
+        // using the tree's exact shipped tensor extinction model.
+        if (s.tree.leaves.leaf_crown_normal_blend > 0.0f) {
+            const crown::ExtinctionModel model{crown::ExtinctionKind::tensor, 0.5f, clumping};
+            for (auto& lod : lods) {
+                apply_crown_normals_to_lod(lod, vol, model, s.tree.leaves.leaf_crown_normal_blend);
+            }
+        }
+    }
+
     // Flat per-LOD PrimitiveData arrays + MeshData wrappers. Storage lives in
     // vectors so the spans inside MeshData stay valid through the GLB build.
-    const auto& lods = g.lods;
     std::vector<std::vector<PrimitiveData>> per_lod_prims(lods.size());
     std::vector<MeshData>                   meshes;
     meshes.reserve(lods.size());
@@ -198,47 +412,7 @@ GeneratedTree generate_tree(const Scenario& s, uint64_t cli_seed) {
         meshes.push_back(md);
     }
 
-    // S-P1: build and pack F2_tensor Option 2A crown density volume from L0 leaf
-    // triangles + mip-0 leaf atlas alpha coverage, padded outward with zero voxels
-    // to enclose union(L0..L2) leaf AABBs, and attach to meshes[0].
-    if (has_leaves && !lods.empty() && lods[0].has_leaves && g.images.size() > 4u) {
-        int w = 0, h = 0, comp = 0;
-        const auto& png = g.images[4].png_bytes;
-        unsigned char* rgba = stbi_load_from_memory(
-            reinterpret_cast<const stbi_uc*>(png.data()), static_cast<int>(png.size()), &w, &h, &comp, 4);
-        if (!rgba)
-            throw std::runtime_error(std::string("generate_tree: failed to decode leaf atlas PNG for crown volume: ")
-                                     + stbi_failure_reason());
-        crown::CrownMesh cm;
-        cm.atlas.width  = w;
-        cm.atlas.height = h;
-        cm.atlas.cutoff = 0.5f;  // matches leaf_prim.material.alpha_cutoff = 0.5f
-        cm.atlas.alpha.resize(size_t(w) * size_t(h));
-        for (size_t i = 0; i < cm.atlas.alpha.size(); ++i) cm.atlas.alpha[i] = rgba[i * 4u + 3u];
-        stbi_image_free(rgba);
-
-        cm.add_leaves(lods[0].leaf_positions, lods[0].leaf_uvs, lods[0].leaf_indices_u32);
-        const crown::Probe l0_probe(std::move(cm));
-
-        vec3 union_min{1e30f, 1e30f, 1e30f};
-        vec3 union_max{-1e30f, -1e30f, -1e30f};
-        for (const auto& lod : lods) {
-            if (!lod.has_leaves) continue;
-            for (size_t i = 0; i + 2 < lod.leaf_positions.size(); i += 3) {
-                const float x = lod.leaf_positions[i + 0];
-                const float y = lod.leaf_positions[i + 1];
-                const float z = lod.leaf_positions[i + 2];
-                union_min = {std::min(union_min.x, x), std::min(union_min.y, y), std::min(union_min.z, z)};
-                union_max = {std::max(union_max.x, x), std::max(union_max.y, y), std::max(union_max.z, z)};
-            }
-        }
-
-        const crown::CrownVolume vol = crown::CrownVolume::build_shipped(l0_probe, union_min, union_max);
-        const float clumping = (s.tree.leaves.geometry_type == LeafGeometryType::BranchStrip)
-                             ? crown::k_strip_crown_clumping
-                             : crown::k_default_crown_clumping;
-        g.crown_volume = vol.pack_option2a(clumping);
-
+    if (g.crown_volume.has_value() && !meshes.empty()) {
         CrownVolumeSpec spec{};
         for (int a = 0; a < 3; ++a) {
             spec.dims[a]    = g.crown_volume->dims[a];

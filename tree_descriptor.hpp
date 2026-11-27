@@ -24,6 +24,8 @@ namespace json { struct value; }
 inline constexpr std::array<int, 4> k_default_lod_leaf_triangle_budget = {8000, 5000, 4000, 0};
 inline constexpr float              k_default_shell_fraction           = 0.40f;
 inline constexpr std::array<int, 2> k_default_cluster_cell_grid        = {4, 3};
+inline constexpr float              k_default_crown_normal_blend       = 0.0f;
+inline constexpr float              k_default_leaf_translucency_scale  = 1.0f;
 
 enum class EnvelopeShape {
     OblateSpheroid,
@@ -126,6 +128,14 @@ struct TreeDescriptor {
         std::array<int, 4> lod_leaf_triangle_budget = k_default_lod_leaf_triangle_budget;
         float              shell_fraction           = k_default_shell_fraction;
         std::array<int, 2> cluster_cell_grid        = k_default_cluster_cell_grid;
+
+        // Crown-lighting L-P2 + L-P3 (J1, J7):
+        // - leaf_crown_normal_blend: per-species blend toward smooth 0.6 m low-passed
+        //   march crown_normal [0, 1]. 0 = raw card normals.
+        // - leaf_translucency_scale: CLM5 Table 2.3.1 class transmittance/reflectance
+        //   ratio relative to broadleaf 0.50 (1.00 broadleaf; 1.42 = 0.71/0.50 conifer).
+        float              leaf_crown_normal_blend  = k_default_crown_normal_blend;
+        float              leaf_translucency_scale  = k_default_leaf_translucency_scale;
     } leaves;
 };
 

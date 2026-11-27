@@ -32,16 +32,16 @@ struct GlbRow {
     uint64_t    fnv1a64;  // det_rng.hpp fnv1a64 over the GLB bytes
 };
 
-// NH-2b r2 Boreal Leaf-Atlas Warm-Harmonization regenerated table:
-// - 4 canonical tree species (oak/maple/birch/pine) + 2 mid-story boreal shrubs
-//   (juniper_shrub, alder_shrub) sharing the warm-harmonized leaf atlas PNG (-31,296 B vs NH-2)
+// Crown Lighting L-P2 + L-P3 regenerated table (J1 march_lowpass_0_6m crown-normal
+// blend: 0.70 pine, 0.45 broadleaf, 0.35 shrubs + J7 1.42x CLM5 needle translucency
+// in the shared 4x4 atlas, +1,192 B uniform PNG delta across all 6 species):
 constexpr std::array<GlbRow, 6> k_glb_table = {{
-    {"oak",           42, 6218840, 0x0339ae8691f48499ull},
-    {"maple",         42, 7166692, 0x25469ab694a4e718ull},
-    {"birch",         42, 5426216, 0x5626c384c74a9e69ull},
-    {"pine",          42, 5490760, 0x99c8b577ab6558caull},
-    {"juniper_shrub", 42, 4808364, 0x08562dcaaf042958ull},
-    {"alder_shrub",   42, 4541160, 0x7d81da56f182bfe5ull},
+    {"oak",           42, 6220032, 0x4cc7a8b6892d39baull},
+    {"maple",         42, 7167884, 0x4a750f6ed45a7dfdull},
+    {"birch",         42, 5427408, 0x198050d5730919b6ull},
+    {"pine",          42, 5491952, 0x6e857e82e88234d2ull},
+    {"juniper_shrub", 42, 4809556, 0xeb90eb0017af7edfull},
+    {"alder_shrub",   42, 4542352, 0x1c169dd65c5a5e1full},
 }};
 
 uint64_t glb_fnv(const std::vector<uint8_t>& b) {

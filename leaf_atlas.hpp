@@ -133,9 +133,26 @@ namespace treegen {
         std::vector<uint8_t> roughness_png;
     };
 
+    // Crown-lighting J7 (CLM5 Technical Note, Table 2.3.1 "Plant functional type
+    // optical properties", Dorman & Sellers 1989):
+    //   BDT temperate (broadleaf deciduous): refl = 0.10, trans = 0.05 -> ratio 0.50 (1.00x global)
+    //   NET temperate (needleleaf evergreen): refl = 0.07, trans = 0.05 -> ratio 0.71 (1.42x global)
+    inline constexpr float K_CLM5_BROADLEAF_TRANSLUCENCY_SCALE = 1.00f;
+    inline constexpr float K_CLM5_NEEDLE_TRANSLUCENCY_SCALE    = 0.71f / 0.50f;  // 1.42f
+
+    constexpr float canonical_translucency_scale(LeafShape s) {
+        return (s == LeafShape::PineNeedle) ? K_CLM5_NEEDLE_TRANSLUCENCY_SCALE
+                                            : K_CLM5_BROADLEAF_TRANSLUCENCY_SCALE;
+    }
+
     // Single-pass bundle encoder (bakes all 16 cells once -> 4x faster than 4 calls).
+    // When `translucency_scale` matches `canonical_translucency_scale(species)` (or
+    // is omitted), all species emit the exact same shared 4x4 atlas PNGs (zero extra VRAM).
     LeafAtlasPngBundle encode_leaf_bundle_pngs(
-        uint64_t seed, const std::array<int, 2>& cluster_cell_grid = k_default_cluster_cell_grid);
+        uint64_t seed,
+        const std::array<int, 2>& cluster_cell_grid = k_default_cluster_cell_grid,
+        LeafShape species = LeafShape::OakLobed,
+        float translucency_scale = -1.0f);
 
     std::vector<uint8_t> encode_leaf_atlas_png(
         uint64_t seed, const std::array<int, 2>& cluster_cell_grid = k_default_cluster_cell_grid);

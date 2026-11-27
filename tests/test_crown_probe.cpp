@@ -27,6 +27,7 @@
 #include <fstream>
 #include <iterator>
 #include <map>
+#include <numeric>
 #include <set>
 #include <sstream>
 #include <string>
@@ -2430,4 +2431,168 @@ TEST_CASE("[crown_probe_species] every registry species at seed 42 returns sunli
         ++probed;
     }
     CHECK(probed == species.size());
+}
+
+// ---- Crown Lighting L-P2 + L-P3 Treegen Gates ([treegen_crown_normals]) ----
+
+TEST_CASE("[treegen_crown_normals] card rigidity, unique per-card normals, orthonormal tangents, K16 volume invariance, and J7 translucency",
+          "[treegen][treegen_crown_normals]") {
+    namespace tsp = rynx::test_support;
+
+    SECTION("card rigidity, unique per-card normals, and tangent orthogonality across all 6 shipped scenarios") {
+        struct Expect { const char* name; float blend; };
+        const Expect specs[6] = {
+            {"oak",           0.45f},
+            {"birch",         0.45f},
+            {"maple",         0.45f},
+            {"pine",          0.70f},
+            {"alder_shrub",   0.35f},
+            {"juniper_shrub", 0.35f},
+        };
+        for (const Expect& sp : specs) {
+            INFO("species=" << sp.name);
+            const treegen::Scenario s = tsp::load_species_scenario(sp.name);
+            CHECK(s.tree.leaves.leaf_crown_normal_blend == Approx(sp.blend).margin(1e-6f));
+            const treegen::GeneratedTree& g = tsp::generated_tree(sp.name, 42);
+            REQUIRE(g.lods.size() == 3u);
+
+            for (size_t li = 0; li < g.lods.size(); ++li) {
+                const auto& lod = g.lods[li];
+                REQUIRE(lod.has_leaves);
+                const size_t vc = lod.leaf_positions.size() / 3;
+                const size_t tc = lod.leaf_indices_u32.size() / 3;
+                REQUIRE(lod.leaf_normals.size() == vc * 3);
+                REQUIRE(lod.leaf_tangents.size() == vc * 4);
+
+                // Connected components (cards) by shared vertex index.
+                std::vector<uint32_t> parent(tc);
+                std::iota(parent.begin(), parent.end(), 0u);
+                auto find_r = [&](uint32_t x) {
+                    while (parent[x] != x) { parent[x] = parent[parent[x]]; x = parent[x]; }
+                    return x;
+                };
+                std::vector<int64_t> first_t(vc, -1);
+                for (size_t t = 0; t < tc; ++t) {
+                    for (int k = 0; k < 3; ++k) {
+                        const uint32_t v = lod.leaf_indices_u32[t * 3 + size_t(k)];
+                        if (first_t[v] < 0) first_t[v] = int64_t(t);
+                        else {
+                            uint32_t a = find_r(uint32_t(first_t[v])), b = find_r(uint32_t(t));
+                            if (a != b) parent[std::max(a, b)] = std::min(a, b);
+                        }
+                    }
+                }
+                std::map<uint32_t, std::vector<uint32_t>> card_verts;
+                for (size_t t = 0; t < tc; ++t) {
+                    const uint32_t r = find_r(uint32_t(t));
+                    for (int k = 0; k < 3; ++k) card_verts[r].push_back(lod.leaf_indices_u32[t * 3 + size_t(k)]);
+                }
+
+                std::set<std::array<uint32_t, 3>> unique_card_normals;
+                for (const auto& [r, vs] : card_verts) {
+                    const uint32_t v0 = vs[0];
+                    uint32_t n0_bits[3];
+                    std::memcpy(n0_bits, &lod.leaf_normals[size_t(v0) * 3], 12);
+                    const vec3 n0{lod.leaf_normals[size_t(v0) * 3 + 0],
+                                  lod.leaf_normals[size_t(v0) * 3 + 1],
+                                  lod.leaf_normals[size_t(v0) * 3 + 2]};
+                    CHECK(std::abs(treegen::length(n0) - 1.0f) < 1e-4f);
+                    for (uint32_t v : vs) {
+                        uint32_t nv_bits[3];
+                        std::memcpy(nv_bits, &lod.leaf_normals[size_t(v) * 3], 12);
+                        // Card rigidity: bit-identical across all vertices of a card.
+                        REQUIRE(nv_bits[0] == n0_bits[0]);
+                        REQUIRE(nv_bits[1] == n0_bits[1]);
+                        REQUIRE(nv_bits[2] == n0_bits[2]);
+                        // Re-orthogonalized unit tangent.
+                        const vec3 tv{lod.leaf_tangents[size_t(v) * 4 + 0],
+                                      lod.leaf_tangents[size_t(v) * 4 + 1],
+                                      lod.leaf_tangents[size_t(v) * 4 + 2]};
+                        CHECK(std::abs(treegen::length(tv) - 1.0f) < 1e-4f);
+                        CHECK(std::abs(treegen::dot(tv, n0)) < 1e-4f);
+                    }
+                    unique_card_normals.insert({n0_bits[0], n0_bits[1], n0_bits[2]});
+                }
+                // Wind flutter uniqueness: no two cards in the LOD share bit-identical normals.
+                CHECK(unique_card_normals.size() == card_verts.size());
+            }
+        }
+    }
+
+    SECTION("K16 volume bytes bit-identical at blend 0 vs shipped blend and stored normals improve 8-NN agreement") {
+        for (const char* sp : {"oak", "pine"}) {
+            INFO("species=" << sp);
+            treegen::Scenario s0 = tsp::load_species_scenario(sp);
+            const treegen::Scenario s1 = s0;
+            REQUIRE(s1.tree.leaves.leaf_crown_normal_blend > 0.0f);
+            s0.tree.leaves.leaf_crown_normal_blend = 0.0f;
+
+            const treegen::GeneratedTree g0 = treegen::generate_tree(s0, 42);
+            const treegen::GeneratedTree g1 = treegen::generate_tree(s1, 42);
+            REQUIRE(g0.crown_volume.has_value());
+            REQUIRE(g1.crown_volume.has_value());
+            CHECK(g0.crown_volume->dims == g1.crown_volume->dims);
+            CHECK(g0.crown_volume->cell_m == g1.crown_volume->cell_m);
+            CHECK(g0.crown_volume->rho_cap == g1.crown_volume->rho_cap);
+            CHECK(g0.crown_volume->tex0 == g1.crown_volume->tex0);
+            CHECK(g0.crown_volume->tex1 == g1.crown_volume->tex1);
+            // Positive control: leaf vertex normals genuinely changed.
+            CHECK(g0.lods[0].leaf_normals != g1.lods[0].leaf_normals);
+            // K14: positions, UVs, and indices are bit-identical (no reordering).
+            CHECK(g0.lods[0].leaf_positions == g1.lods[0].leaf_positions);
+            CHECK(g0.lods[0].leaf_uvs == g1.lods[0].leaf_uvs);
+            CHECK(g0.lods[0].leaf_indices_u32 == g1.lods[0].leaf_indices_u32);
+
+            // Per-site stored normal 8-NN neighbour agreement beats blend-0 card normals.
+            auto mean_site_agree = [](const treegen::LodOutput& lod) {
+                const cr::SiteRule sr = cr::derive_sites(lod.leaf_positions, lod.leaf_indices_u32);
+                const size_t ns = sr.sites.size();
+                std::vector<vec3> sn(ns);
+                for (size_t i = 0; i < ns; ++i) {
+                    vec3 sum{0, 0, 0};
+                    for (uint32_t ti : sr.sites[i].triangles) {
+                        const uint32_t v0 = lod.leaf_indices_u32[size_t(ti) * 3];
+                        sum = sum + vec3{lod.leaf_normals[size_t(v0) * 3 + 0],
+                                         lod.leaf_normals[size_t(v0) * 3 + 1],
+                                         lod.leaf_normals[size_t(v0) * 3 + 2]};
+                    }
+                    sn[i] = treegen::normalized(sum);
+                }
+                double total = 0.0;
+                for (size_t i = 0; i < ns; ++i) {
+                    std::vector<std::pair<float, size_t>> ds;
+                    ds.reserve(ns - 1);
+                    for (size_t j = 0; j < ns; ++j) {
+                        if (j == i) continue;
+                        const vec3 d = sr.sites[j].centroid - sr.sites[i].centroid;
+                        ds.push_back({treegen::dot(d, d), j});
+                    }
+                    std::nth_element(ds.begin(), ds.begin() + 8, ds.end());
+                    double s = 0.0;
+                    for (int k = 0; k < 8; ++k) s += treegen::dot(sn[i], sn[ds[size_t(k)].second]);
+                    total += s / 8.0;
+                }
+                return total / double(ns);
+            };
+            const double agree0 = mean_site_agree(g0.lods[0]);
+            const double agree1 = mean_site_agree(g1.lods[0]);
+            INFO(sp << " 8-NN stored normal agreement: blend0=" << agree0 << " shipped=" << agree1);
+            CHECK(agree1 > agree0 + 0.10);
+        }
+    }
+
+    SECTION("J7 pine translucency scale 1.42x in shared atlas with zero extra VRAM dedup") {
+        const treegen::GeneratedTree& oak  = tsp::generated_tree("oak", 42);
+        const treegen::GeneratedTree& pine = tsp::generated_tree("pine", 42);
+        const treegen::GeneratedTree& jun  = tsp::generated_tree("juniper_shrub", 42);
+        // Single shared atlas PNG across all 3 species (zero extra VRAM).
+        CHECK(oak.images[6].png_bytes == pine.images[6].png_bytes);
+        CHECK(pine.images[6].png_bytes == jun.images[6].png_bytes);
+
+        // Compare shipped pine (1.42x) vs explicit 1.0x override in pine's column (col 1, rows 1..3).
+        treegen::Scenario s_unscaled = tsp::load_species_scenario("pine");
+        s_unscaled.tree.leaves.leaf_translucency_scale = 1.0f;
+        const treegen::GeneratedTree pine_1x = treegen::generate_tree(s_unscaled, 42);
+        CHECK(pine_1x.images[6].png_bytes != pine.images[6].png_bytes);
+    }
 }

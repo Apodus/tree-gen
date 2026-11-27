@@ -46,6 +46,8 @@
     "leaf_phototropic_bias": 0.60,
     "leaf_bend_half_angle": 0.45,
     "lod_leaf_triangle_budget": [2400, 1400, 700, 0],
-    "shell_fraction": 0.18
+    "shell_fraction": 0.18,
+    "leaf_crown_normal_blend": 0.35,
+    "leaf_translucency_scale": 1.42
   }
 }

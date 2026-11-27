@@ -44,6 +44,8 @@
     "leaf_density_per_meter": 4.8,
     "leaf_depth_density_curve": 0.8,
     "leaf_phototropic_bias": 0.40,
-    "leaf_bend_half_angle": 0.50
+    "leaf_bend_half_angle": 0.50,
+    "leaf_crown_normal_blend": 0.70,
+    "leaf_translucency_scale": 1.42
   }
 }

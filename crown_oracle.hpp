@@ -291,6 +291,13 @@ struct NormalsReport {
     std::vector<uint8_t> site_inner_half;
 };
 
+// Evaluates §5.3's smooth crown-scale outward direction at `p` using the 0.6 m
+// low-passed 64-direction Fibonacci march: normalize(sum_d d / (1 + tau_lp(p, d))).
+// Single source of truth shared by L-P0a's measure_normals and L-P2's tree generator.
+vec3 march_crown_normal(const CrownVolume& volume, const ExtinctionModel& model,
+                        vec3 p, vec3 fallback,
+                        float lowpass_sigma_m = k_normals_lowpass_sigma_m);
+
 // Measures the four candidate leaf-normal sources of crown-lighting §5.3
 // (card, per-tree ellipsoid, 0.6 m low-passed march, and -grad of density(p))
 // over all mesh-derived leaf sites of `probe` using `volume` and `model`.

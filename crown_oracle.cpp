@@ -815,6 +815,35 @@ FormatDecision decide_format(const std::vector<FormatElevation>& elevations) {
 
 // ---- Normals mode (crown-lighting L-P0a, §5.3, §5.5, K17) -------------------
 
+namespace {
+std::array<vec3, k_normals_directions> normals_sphere_directions() {
+    std::array<vec3, k_normals_directions> dirs;
+    const double golden = k_pi * (3.0 - std::sqrt(5.0));
+    for (int k = 0; k < k_normals_directions; ++k) {
+        const double z = 1.0 - 2.0 * (double(k) + 0.5) / double(k_normals_directions);
+        const double r = std::sqrt(std::max(0.0, 1.0 - z * z));
+        const double ph = golden * double(k);
+        dirs[size_t(k)] = vec3{float(r * std::cos(ph)), float(r * std::sin(ph)), float(z)};
+    }
+    return dirs;
+}
+}  // namespace
+
+vec3 march_crown_normal(const CrownVolume& volume, const ExtinctionModel& model,
+                        vec3 p, vec3 fallback, float lowpass_sigma_m) {
+    static const auto dirs = normals_sphere_directions();
+    double sx = 0.0, sy = 0.0, sz = 0.0;
+    for (int k = 0; k < k_normals_directions; ++k) {
+        const double t = double(volume.optical_depth(p, dirs[size_t(k)], lowpass_sigma_m, model));
+        const double w = 1.0 / (1.0 + t);
+        sx += w * double(dirs[size_t(k)].x);
+        sy += w * double(dirs[size_t(k)].y);
+        sz += w * double(dirs[size_t(k)].z);
+    }
+    const double sl = std::sqrt(sx * sx + sy * sy + sz * sz);
+    return sl > 1e-12 ? vec3{float(sx / sl), float(sy / sl), float(sz / sl)} : fallback;
+}
+
 NormalsReport measure_normals(const Probe& probe, const CrownVolume& volume, const ExtinctionModel& model,
                               float lowpass_sigma_m) {
     NormalsReport report;
@@ -872,14 +901,7 @@ NormalsReport measure_normals(const Probe& probe, const CrownVolume& volume, con
     for (size_t r = 0; r < inner_n; ++r) report.site_inner_half[order[r]] = 1;
 
     // 64 full-sphere Fibonacci directions (deterministic golden-angle spiral).
-    std::array<vec3, k_normals_directions> dirs;
-    const double golden = k_pi * (3.0 - std::sqrt(5.0));
-    for (int k = 0; k < k_normals_directions; ++k) {
-        const double z = 1.0 - 2.0 * (double(k) + 0.5) / double(k_normals_directions);
-        const double r = std::sqrt(std::max(0.0, 1.0 - z * z));
-        const double ph = golden * double(k);
-        dirs[size_t(k)] = vec3{float(r * std::cos(ph)), float(r * std::sin(ph)), float(z)};
-    }
+    const std::array<vec3, k_normals_directions> dirs = normals_sphere_directions();
 
     // Warm the low-pass cache on the main thread before parallel site marches.
     if (lowpass_sigma_m > 0.0f)

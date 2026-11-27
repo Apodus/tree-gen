@@ -245,6 +245,18 @@ TreeDescriptor parse_tree_descriptor(const json::value& obj) {
         }
         if (lv->find("cluster_cell_grid"))
             td.leaves.cluster_cell_grid = parse_int_array<2>(*lv, "cluster_cell_grid", 1);
+        if (lv->find("leaf_crown_normal_blend")) {
+            const auto v = json::get_number(*lv, "leaf_crown_normal_blend");
+            if (!v || !(*v >= 0.0 && *v <= 1.0))
+                throw std::runtime_error("tree_descriptor: leaves.leaf_crown_normal_blend must be a number in [0, 1]");
+            td.leaves.leaf_crown_normal_blend = static_cast<float>(*v);
+        }
+        if (lv->find("leaf_translucency_scale")) {
+            const auto v = json::get_number(*lv, "leaf_translucency_scale");
+            if (!v || !(*v >= 0.1 && *v <= 3.0))
+                throw std::runtime_error("tree_descriptor: leaves.leaf_translucency_scale must be a number in [0.1, 3.0]");
+            td.leaves.leaf_translucency_scale = static_cast<float>(*v);
+        }
         if ((has_budget || has_shell) && td.leaves.geometry_type == LeafGeometryType::BranchStrip)
             throw std::runtime_error(
                 "tree_descriptor: leaves.lod_leaf_triangle_budget and leaves.shell_fraction act on leaf sites; "
@@ -332,6 +344,14 @@ std::string serialize_tree_descriptor(const TreeDescriptor& td) {
     if (td.leaves.cluster_cell_grid != k_default_cluster_cell_grid) {
         out += ",\n"; indent(out, 2); out += "\"cluster_cell_grid\": ";
         emit_int_array(out, td.leaves.cluster_cell_grid);
+    }
+    if (td.leaves.leaf_crown_normal_blend != k_default_crown_normal_blend) {
+        out += ",\n"; indent(out, 2); out += "\"leaf_crown_normal_blend\": ";
+        emit_float(out, td.leaves.leaf_crown_normal_blend);
+    }
+    if (td.leaves.leaf_translucency_scale != k_default_leaf_translucency_scale) {
+        out += ",\n"; indent(out, 2); out += "\"leaf_translucency_scale\": ";
+        emit_float(out, td.leaves.leaf_translucency_scale);
     }
     out += "\n";
     indent(out, 1); out += "}\n";
